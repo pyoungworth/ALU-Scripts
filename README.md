@@ -33,7 +33,7 @@ Extracts downloaded zip files into a build folder ready to copy to USB. Features
 
 ```powershell
 .\Extract-To-USB.ps1
-.\Extract-To-USB.ps1 -Path "F:\AS2"
+.\Extract-To-USB.ps1 -Path "D:\AS2"
 ```
 
 ### Analyze-Duplicates.ps1
@@ -42,7 +42,7 @@ Scans directories for duplicate/versioned files (e.g., `App v2.0b2.zip` and `App
 
 ```powershell
 .\Analyze-Duplicates.ps1
-.\Analyze-Duplicates.ps1 -Path "F:\MyFiles"
+.\Analyze-Duplicates.ps1 -Path "D:\MyFiles"
 ```
 
 ## Requirements
@@ -52,31 +52,67 @@ Scans directories for duplicate/versioned files (e.g., `App v2.0b2.zip` and `App
 - **winget** (comes with Windows, used to install rclone if needed)
 - Access to the RetroFE ALU Google Shared Drive (for the download script)
 
-## Quick Start
+## Getting Started (Step by Step)
 
-1. **Download the files from Google Drive:**
+If you've never used PowerShell before, don't worry -- just follow these steps.
 
-   ```powershell
-   .\Download-From-GDrive.ps1
-   ```
+### 1. Download These Scripts
 
-2. **Extract to USB:**
+- Click the green **Code** button at the top of this page, then click **Download ZIP**
+- Extract the zip to a folder you'll remember (e.g., `C:\ALU-Scripts`)
 
-   ```powershell
-   .\Extract-To-USB.ps1
-   ```
+### 2. Open PowerShell
 
-3. **Plug the USB into your Legends Ultimate and enjoy!**
+There are two easy ways:
 
-## Running Scripts for the First Time
+**Option A -- Open PowerShell directly in the folder (recommended):**
 
-If PowerShell blocks the script with a security warning, run this once first:
+1. Open the folder where you extracted the scripts in File Explorer
+2. Click in the **address bar** at the top (where it shows the folder path)
+3. Type `powershell` and press **Enter**
+4. A blue PowerShell window will open, already in the right folder
+
+**Option B -- Open PowerShell from the Start Menu:**
+
+1. Click the **Start** button and type `PowerShell`
+2. Click **Windows PowerShell** (the blue icon -- not "PowerShell ISE")
+3. Navigate to your scripts folder by typing:
+
+```powershell
+cd C:\ALU-Scripts
+```
+
+(Replace `C:\ALU-Scripts` with wherever you extracted the files)
+
+### 3. Allow Scripts to Run (One-Time Setup)
+
+Windows blocks scripts by default for security. You need to allow them once. Copy and paste this into PowerShell and press **Enter**:
 
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 ```
 
-Or right-click the script, select Properties, and check "Unblock" at the bottom.
+Type **Y** and press **Enter** when it asks to confirm. You only need to do this once.
+
+> **Alternative:** Right-click each `.ps1` script file, select **Properties**, and check **Unblock** at the bottom.
+
+### 4. Run the Scripts
+
+Now you're ready! Just type the script name and press **Enter**:
+
+```powershell
+.\Download-From-GDrive.ps1
+```
+
+The script will walk you through everything from there -- just follow the prompts.
+
+Once the download finishes, extract to USB:
+
+```powershell
+.\Extract-To-USB.ps1
+```
+
+### 5. Plug the USB into your Legends Ultimate and enjoy!
 
 ## Community
 
