@@ -122,7 +122,9 @@ Write-Host "  What this will do:" -ForegroundColor Gray
 Write-Host "    1. Install rclone (a download tool) if needed" -ForegroundColor Gray
 Write-Host "    2. Connect to Google Drive (you'll sign in via browser)" -ForegroundColor Gray
 Write-Host "    3. Pick where to save the files" -ForegroundColor Gray
-Write-Host "    4. Download everything" -ForegroundColor Gray
+Write-Host "    4. Optionally limit download speed" -ForegroundColor Gray
+Write-Host "    5. Choose optional content (marquees, themes, system packs)" -ForegroundColor Gray
+Write-Host "    6. Download everything" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  If the download gets interrupted, just run this script" -ForegroundColor Yellow
 Write-Host "  again -- it will pick up where it left off!" -ForegroundColor Yellow
@@ -445,6 +447,46 @@ if (-not $remoteExists) {
     }
 }
 
+# -- Locate the build folder on the drive (e.g. ___One saUCE 2.0) -----------------
+# We download from this folder rather than the drive root, which may contain
+# other files/folders that aren't part of the build.
+
+$remoteSrcPath = "/"
+$buildFolderName = $null
+
+try {
+    $topDirs = @(& $rclonePath lsf --dirs-only "${remoteName}:/" 2>$null) |
+               ForEach-Object { $_.TrimEnd('/').Trim() } | Where-Object { $_ -ne '' }
+
+    # Look for the release build folder (e.g. ___One saUCE 2.0)
+    # Prefer folders with "saUCE 2" to avoid matching beta/testing folders
+    foreach ($dir in $topDirs) {
+        if ($dir -like '*saUCE 2*') {
+            $buildFolderName = $dir
+            $remoteSrcPath = "/$dir"
+            break
+        }
+    }
+
+    # Fallback: any folder starting with ___ that contains "saUCE"
+    if (-not $buildFolderName) {
+        foreach ($dir in $topDirs) {
+            if ($dir -like '___*saUCE*') {
+                $buildFolderName = $dir
+                $remoteSrcPath = "/$dir"
+                break
+            }
+        }
+    }
+} catch {}
+
+if ($buildFolderName) {
+    Write-OK "Build folder: $buildFolderName"
+}
+else {
+    Write-Info "No specific build folder found -- downloading everything from the drive root."
+}
+
 # =================================================================================
 #  STEP 3: WHERE TO DOWNLOAD
 # =================================================================================
@@ -671,16 +713,330 @@ else {
 }
 
 # =================================================================================
-#  STEP 5: DOWNLOAD
+#  STEP 5: CONTENT SELECTION
 # =================================================================================
 
-Write-Header "STEP 5: DOWNLOADING FILES"
+Write-Header "STEP 5: CONTENT SELECTION"
+
+$excludeFilters = @()
+$skippedBitLCD = $false
+$skippedThemes = $false
+$skippedScreensaver = $false
+$skippedSystemPacks = 0
 
 Write-Host ""
-Write-Host "  Source:      Google Drive ($remoteName)" -ForegroundColor White
+Write-Host "    [A]  Download EVERYTHING (default)" -ForegroundColor Green
+Write-Host "    [C]  Customize what to download" -ForegroundColor Yellow
+Write-Host ""
+
+$contentChoice = Read-Host "  Choice (A/C, q to quit)"
+Test-Quit $contentChoice
+
+if ($contentChoice.ToUpper() -eq 'C') {
+
+# Get the folder list once for all content selection prompts
+$buildDirs = @()
+try {
+    $rawDirs = & $rclonePath lsf --dirs-only "${remoteName}:${remoteSrcPath}" 2>$null
+    if ($rawDirs) {
+        $buildDirs = @($rawDirs | ForEach-Object { $_.TrimEnd('/').Trim() } | Where-Object { $_ -ne '' })
+    }
+} catch {}
+
+# Identify optional content folders
+$bitlcdFolder = $buildDirs | Where-Object { $_ -like '*BitLCD*' } | Select-Object -First 1
+$themesFolder = $buildDirs | Where-Object { $_ -like '*Themes*' } | Select-Object -First 1
+
+
+# Get sizes for optional content (shows progress while fetching)
+Write-Host ""
+Write-Host "  Checking sizes of optional content..." -ForegroundColor Gray
+
+$bitlcdSize = $null
+$themesSize = $null
+$screensaverSize = $null
+
+if ($bitlcdFolder) {
+    try {
+        $sizeOutput = & $rclonePath size "${remoteName}:${remoteSrcPath}/$bitlcdFolder" --json 2>$null | Out-String
+        $sizeJson = $sizeOutput | ConvertFrom-Json
+        $bitlcdSize = [long]$sizeJson.bytes
+    } catch {}
+}
+if ($themesFolder) {
+    try {
+        $sizeOutput = & $rclonePath size "${remoteName}:${remoteSrcPath}/$themesFolder" --json 2>$null | Out-String
+        $sizeJson = $sizeOutput | ConvertFrom-Json
+        $themesSize = [long]$sizeJson.bytes
+    } catch {}
+}
+try {
+    $sizeOutput = & $rclonePath size "${remoteName}:${remoteSrcPath}" --include "**/ha8800_screensaver*/**" --json 2>$null | Out-String
+    $sizeJson = $sizeOutput | ConvertFrom-Json
+    if ($sizeJson.bytes -gt 0) {
+        $screensaverSize = [long]$sizeJson.bytes
+    }
+} catch {}
+
+# -- Optional content: BitLCD Marquees --
+if ($bitlcdFolder) {
+    $sizeLabel = if ($bitlcdSize) { "  (~$(Format-FileSize $bitlcdSize))" } else { "" }
+    Write-Host ""
+    Write-Host "  Include " -NoNewline
+    Write-Host "BitLCD Marquees" -ForegroundColor Yellow -NoNewline
+    Write-Host "?$sizeLabel" -ForegroundColor White
+    Write-Host "  (LCD marquee images for supported games)" -ForegroundColor Gray
+    Write-Host ""
+    $bitlcdChoice = Read-Host "  (y/n, default: y, q to quit)"
+    Test-Quit $bitlcdChoice
+    if ($bitlcdChoice.ToLower() -eq 'n') {
+        $excludeFilters += "--exclude"
+        $excludeFilters += "/$bitlcdFolder/**"
+        $skippedBitLCD = $true
+        Write-Host "    - Skipping $bitlcdFolder" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host "    + Including BitLCD Marquees" -ForegroundColor Green
+    }
+}
+
+# -- Optional content: Themes --
+if ($themesFolder) {
+    $sizeLabel = if ($themesSize) { "  (~$(Format-FileSize $themesSize))" } else { "" }
+    Write-Host ""
+    Write-Host "  Include " -NoNewline
+    Write-Host "Optional Themes" -ForegroundColor Yellow -NoNewline
+    Write-Host "?$sizeLabel" -ForegroundColor White
+    Write-Host "  (Additional visual themes for RetroFE)" -ForegroundColor Gray
+    Write-Host ""
+    $themesChoice = Read-Host "  (y/n, default: y, q to quit)"
+    Test-Quit $themesChoice
+    if ($themesChoice.ToLower() -eq 'n') {
+        $excludeFilters += "--exclude"
+        $excludeFilters += "/$themesFolder/**"
+        $skippedThemes = $true
+        Write-Host "    - Skipping $themesFolder" -ForegroundColor DarkGray
+    }
+    else {
+        Write-Host "    + Including Optional Themes" -ForegroundColor Green
+    }
+}
+
+# -- Optional content: Screensaver --
+$sizeLabel = if ($screensaverSize) { "  (~$(Format-FileSize $screensaverSize))" } else { "" }
+Write-Host ""
+Write-Host "  Include " -NoNewline
+Write-Host "Screensaver" -ForegroundColor Yellow -NoNewline
+Write-Host "?$sizeLabel" -ForegroundColor White
+Write-Host "  (Attract-mode screensaver videos)" -ForegroundColor Gray
+Write-Host ""
+$screensaverChoice = Read-Host "  (y/n, default: y, q to quit)"
+Test-Quit $screensaverChoice
+if ($screensaverChoice.ToLower() -eq 'n') {
+    # Only exclude the screensaver folder itself (e.g. ha8800_screensaver v2.0b5/)
+    # This does NOT affect any other files in the same directory (background, zips, etc.)
+    $excludeFilters += "--exclude"
+    $excludeFilters += "**/ha8800_screensaver*/**"
+    $skippedScreensaver = $true
+    Write-Host "    - Skipping screensaver" -ForegroundColor DarkGray
+}
+else {
+    Write-Host "    + Including Screensaver" -ForegroundColor Green
+}
+
+# -- System pack selection --
+Write-Host ""
+Write-Host "  Which " -NoNewline
+Write-Host "System Packs" -ForegroundColor Yellow -NoNewline
+Write-Host " do you want?" -ForegroundColor White
+Write-Host "  (e.g. Arcade, NES, SNES, Daphne, etc)" -ForegroundColor Gray
+Write-Host ""
+Write-Host "    [A]  Download ALL systems (default)" -ForegroundColor Green
+Write-Host "    [S]  Let me pick which systems I want" -ForegroundColor Yellow
+Write-Host ""
+
+$sysChoice = Read-Host "  Choice (A/S, q to quit)"
+Test-Quit $sysChoice
+
+if ($sysChoice.ToUpper() -eq 'S') {
+    Write-Host ""
+    Write-Host "  Loading system packs from Google Drive..." -ForegroundColor Gray
+
+    # Find the System Packs folder from the already-loaded folder list
+    $systemPacksPath = $buildDirs | Where-Object { $_ -like '*System Packs*' } | Select-Object -First 1
+
+    if (-not $systemPacksPath) {
+        Write-Fail "Could not find the System Packs folder on the drive."
+        Write-Info "All files will be downloaded instead."
+    }
+    else {
+        Write-OK "Found: $systemPacksPath"
+        Write-Host ""
+
+        # Get file list with sizes using lsjson
+        $systemPacks = @()
+        try {
+            $jsonOutput = & $rclonePath lsjson "${remoteName}:${remoteSrcPath}/$systemPacksPath" 2>&1 | Out-String
+            $jsonItems = $jsonOutput | ConvertFrom-Json
+            foreach ($item in $jsonItems) {
+                if ($item.Name -like '*.zip' -and -not $item.IsDir) {
+                    $systemPacks += [PSCustomObject]@{
+                        FileName    = $item.Name
+                        DisplayName = [System.IO.Path]::GetFileNameWithoutExtension($item.Name)
+                        Size        = [long]$item.Size
+                        SizeText    = Format-FileSize ([long]$item.Size)
+                    }
+                }
+            }
+            # Sort alphabetically by display name
+            $systemPacks = @($systemPacks | Sort-Object DisplayName)
+        } catch {}
+
+        if ($systemPacks.Count -gt 0) {
+            $totalSize = ($systemPacks | Measure-Object -Property Size -Sum).Sum
+            Write-Host "  $($systemPacks.Count) system packs available ($(Format-FileSize $totalSize) total):" -ForegroundColor White
+            Write-Host ""
+
+            # Display in two columns with sizes
+            $colCount = 2
+            $nameWidth = 40
+            $rows = [math]::Ceiling($systemPacks.Count / $colCount)
+
+            for ($row = 0; $row -lt $rows; $row++) {
+                $line = ""
+                for ($col = 0; $col -lt $colCount; $col++) {
+                    $idx = $col * $rows + $row
+                    if ($idx -lt $systemPacks.Count) {
+                        $sp = $systemPacks[$idx]
+                        $num = ($idx + 1).ToString().PadLeft(2)
+                        $name = $sp.DisplayName
+                        if ($name.Length -gt $nameWidth) { $name = $name.Substring(0, $nameWidth - 3) + "..." }
+                        $entry = "  [$num] $($name.PadRight($nameWidth)) $($sp.SizeText.PadLeft(9))"
+                        $line += $entry
+                    }
+                }
+                Write-Host "  $line" -ForegroundColor White
+            }
+
+            Write-Host ""
+            Write-Host "  HOW TO SELECT:" -ForegroundColor Yellow
+            Write-Host "    all             Download everything (default)" -ForegroundColor Gray
+            Write-Host "    1,3,5           Pick specific systems" -ForegroundColor Gray
+            Write-Host "    1-20            Pick a range" -ForegroundColor Gray
+            Write-Host "    all,!5,!12      Download all EXCEPT #5 and #12" -ForegroundColor Gray
+            Write-Host "    all,!30-40      Download all EXCEPT #30 through #40" -ForegroundColor Gray
+            Write-Host ""
+
+            $sysResponse = Read-Host "  Selection (Enter for all)"
+            Test-Quit $sysResponse
+
+            if (-not $sysResponse -or $sysResponse.Trim() -eq '' -or $sysResponse.Trim().ToLower() -eq 'all') {
+                # Check for exclusions like "all,!5,!12"
+                if ($sysResponse -and $sysResponse -match '!') {
+                    # Parse with exclusions
+                }
+                else {
+                    Write-OK "Downloading ALL system packs"
+                    $sysResponse = $null
+                }
+            }
+
+            if ($sysResponse) {
+                # Parse selection -- supports: numbers, ranges, all, and !exclusions
+                $selectedNums = [System.Collections.Generic.HashSet[int]]::new()
+                $excludedNums = [System.Collections.Generic.HashSet[int]]::new()
+                $tokens = $sysResponse -split ',' | ForEach-Object { $_.Trim() }
+
+                foreach ($token in $tokens) {
+                    if ($token.ToLower() -eq 'all') {
+                        for ($n = 1; $n -le $systemPacks.Count; $n++) { [void]$selectedNums.Add($n) }
+                    }
+                    elseif ($token -match '^!(\d+)-(\d+)$') {
+                        $s = [int]$Matches[1]; $e = [int]$Matches[2]
+                        for ($n = $s; $n -le $e; $n++) { [void]$excludedNums.Add($n) }
+                    }
+                    elseif ($token -match '^!(\d+)$') {
+                        [void]$excludedNums.Add([int]$Matches[1])
+                    }
+                    elseif ($token -match '^(\d+)-(\d+)$') {
+                        $s = [int]$Matches[1]; $e = [int]$Matches[2]
+                        for ($n = $s; $n -le $e; $n++) { [void]$selectedNums.Add($n) }
+                    }
+                    elseif ($token -match '^\d+$') {
+                        [void]$selectedNums.Add([int]$token)
+                    }
+                }
+
+                # Apply exclusions
+                foreach ($ex in $excludedNums) { [void]$selectedNums.Remove($ex) }
+
+                # Build exclude filters for packs NOT selected
+                $includedPacks = @()
+                $excludedPacks = @()
+                $includedSize = [long]0
+                $excludedSize = [long]0
+
+                for ($i = 0; $i -lt $systemPacks.Count; $i++) {
+                    $sp = $systemPacks[$i]
+                    $num = $i + 1
+                    if ($selectedNums.Contains($num)) {
+                        $includedPacks += $sp
+                        $includedSize += $sp.Size
+                    }
+                    else {
+                        $excludedPacks += $sp
+                        $excludedSize += $sp.Size
+                        $excludeFilters += "--exclude"
+                        $excludeFilters += "/$systemPacksPath/$($sp.FileName)"
+                    }
+                }
+
+                Write-Host ""
+                Write-Host "  Including $($includedPacks.Count) system(s) ($(Format-FileSize $includedSize)):" -ForegroundColor Green
+                foreach ($ip in $includedPacks) {
+                    Write-Host "    + $($ip.DisplayName)  ($($ip.SizeText))" -ForegroundColor Green
+                }
+                if ($excludedPacks.Count -gt 0) {
+                    $skippedSystemPacks = $excludedPacks.Count
+                    Write-Host ""
+                    Write-Host "  Skipping $($excludedPacks.Count) system(s) -- saving $(Format-FileSize $excludedSize)" -ForegroundColor DarkGray
+                }
+            }
+        }
+        else {
+            Write-Info "Could not list system packs. All files will be downloaded."
+        }
+    }
+}
+else {
+    Write-OK "Downloading ALL system packs"
+}
+
+} # end of "Customize" block
+else {
+    Write-OK "Downloading everything"
+}
+
+# =================================================================================
+#  STEP 6: DOWNLOAD
+# =================================================================================
+
+Write-Header "STEP 6: DOWNLOADING FILES"
+
+Write-Host ""
+$sourceLabel = if ($buildFolderName) { "Google Drive ($remoteName) / $buildFolderName" } else { "Google Drive ($remoteName)" }
+Write-Host "  Source:      $sourceLabel" -ForegroundColor White
 Write-Host "  Destination: $downloadPath" -ForegroundColor White
 if ($bwLimit) {
     Write-Host "  Speed limit: $bwLimit/s" -ForegroundColor White
+}
+$skipSummary = @()
+if ($skippedBitLCD) { $skipSummary += "BitLCD Marquees" }
+if ($skippedThemes) { $skipSummary += "Optional Themes" }
+if ($skippedScreensaver) { $skipSummary += "Screensaver" }
+if ($skippedSystemPacks -gt 0) { $skipSummary += "$skippedSystemPacks system pack(s)" }
+if ($skipSummary.Count -gt 0) {
+    Write-Host "  Excluding:   $($skipSummary -join ', ')" -ForegroundColor Yellow
 }
 Write-Host ""
 Write-Host "  The download will show progress as it runs." -ForegroundColor Gray
@@ -721,7 +1077,12 @@ if ($bwLimit) {
     $rcloneArgs += $bwLimit
 }
 
-$rcloneArgs += "${remoteName}:/"
+# Add system pack exclusion filters
+if ($excludeFilters.Count -gt 0) {
+    $rcloneArgs += $excludeFilters
+}
+
+$rcloneArgs += "${remoteName}:${remoteSrcPath}"
 $rcloneArgs += $downloadPath
 
 # Run the download

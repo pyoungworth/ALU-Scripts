@@ -8,17 +8,167 @@ These scripts are designed to be as user-friendly as possible -- just run them a
 
 ### Download-From-GDrive.ps1
 
-Downloads all build files from Google Drive. Handles everything automatically:
+Downloads build files from Google Drive. Handles everything automatically:
 
 - Installs [rclone](https://rclone.org/) if not already installed
 - Walks you through Google account sign-in (opens browser)
-- Auto-detects the RetroFE ALU shared drive
+- Auto-detects the RetroFE ALU shared drive and build folder
 - Lets you pick where to download and optionally limit bandwidth
+- **Choose what to download** -- download everything, or customize:
+  - BitLCD Marquees (with size shown)
+  - Optional Themes (with size shown)
+  - Screensaver (with size shown)
+  - System Packs -- download all 76 systems, or pick specific ones (sizes shown for each)
 - **Resumable** -- if interrupted, just run again and it picks up where it left off
 
 ```powershell
 .\Download-From-GDrive.ps1
 ```
+
+<details>
+<summary>Example output (click to expand)</summary>
+
+```
+  ============================================================
+  GOOGLE DRIVE DOWNLOAD TOOL
+  ============================================================
+
+  This script will help you download all the files from
+  Google Drive. Just follow the prompts!
+
+  What this will do:
+    1. Install rclone (a download tool) if needed
+    2. Connect to Google Drive (you'll sign in via browser)
+    3. Pick where to save the files
+    4. Optionally limit download speed
+    5. Choose optional content (marquees, themes, system packs)
+    6. Download everything
+
+  If the download gets interrupted, just run this script
+  again -- it will pick up where it left off!
+
+  Ready to start? (y/n, q to quit): y
+
+================================================================================
+  STEP 1: CHECKING FOR RCLONE
+================================================================================
+  [OK] rclone is already installed
+
+================================================================================
+  STEP 2: GOOGLE DRIVE CONNECTION
+================================================================================
+  [OK] Google Drive connection 'RetroFE' already exists
+  [OK] Connection is working!
+  [OK] Build folder: ___One saUCE 2.0
+
+================================================================================
+  STEP 3: WHERE DO YOU WANT TO DOWNLOAD TO?
+================================================================================
+
+  You'll need at least 1 TB of free space for the full download.
+
+    [1]  C:\ drive  [NVMe - Windows]  (1.40 TB free of 1.86 TB)
+    [2]  D:\ drive  [USB - External Drive]  (5.08 TB free of 9.10 TB)
+
+  Pick a drive (enter number, q to quit): 2
+
+  What do you want to name the download folder?
+
+  Examples: AwesomeSauce2, RetroFE-Download, AS2
+
+  Folder name (q to quit): AS2
+
+  Download destination: D:\AS2
+
+================================================================================
+  STEP 4: DOWNLOAD SPEED
+================================================================================
+
+  The download will use your full internet speed by default.
+  If you want to browse the web or stream video while downloading,
+  you can limit the download speed.
+
+    [1]  Full speed (use all bandwidth)
+    [2]  Limit speed (save some for other use)
+
+  Choice (1, 2, or q to quit): 1
+  [OK] Using full download speed
+
+================================================================================
+  STEP 5: CONTENT SELECTION
+================================================================================
+
+    [A]  Download EVERYTHING (default)
+    [C]  Customize what to download
+
+  Choice (A/C, q to quit): C
+
+  Checking sizes of optional content...
+
+  Include BitLCD Marquees?  (~35.87 GB)
+  (LCD marquee images for supported games)
+
+  (y/n, default: y, q to quit): y
+    + Including BitLCD Marquees
+
+  Include Optional Themes?  (~13.84 GB)
+  (Additional visual themes for RetroFE)
+
+  (y/n, default: y, q to quit): n
+    - Skipping Optional Themes
+
+  Include Screensaver?  (~247.51 GB)
+  (Attract-mode screensaver videos)
+
+  (y/n, default: y, q to quit): n
+    - Skipping screensaver
+
+  Which System Packs do you want?
+  (e.g. Arcade, NES, SNES, Daphne, etc)
+
+    [A]  Download ALL systems (default)
+    [S]  Let me pick which systems I want
+
+  Choice (A/S, q to quit): S
+
+  76 system packs available (925.11 GB total):
+
+    [ 1] AmstradCPC v2.0b2                3.26 GB  [39] NintendoFamicon v2.0b2          1.38 GB
+    [ 2] AmstradGX4000 v2.0b2            86.56 MB  [40] NintendoFamiconDiskSystem ...  827.13 MB
+    [ 3] Arcade v2.0b3                   15.09 GB  [41] NintendoGame&Watch v2.0b2      166.81 MB
+    ...
+
+  HOW TO SELECT:
+    all             Download everything (default)
+    1,3,5           Pick specific systems
+    1-20            Pick a range
+    all,!5,!12      Download all EXCEPT #5 and #12
+    all,!30-40      Download all EXCEPT #30 through #40
+
+  Selection (Enter for all): 3,19,57,64
+
+  Including 4 system(s):
+    + Arcade v2.0b3  (15.09 GB)
+    + Daphne v2.0b3  (85.23 GB)
+    + SegaGenesis v2.0b2  (3.80 GB)
+    + SNES v2.0b2  (70.75 GB)
+
+  Skipping 72 system(s) -- saving 750.24 GB
+
+================================================================================
+  STEP 6: DOWNLOADING FILES
+================================================================================
+
+  Source:      Google Drive (RetroFE) / ___One saUCE 2.0
+  Destination: D:\AS2
+  Excluding:   Optional Themes, Screensaver, 72 system pack(s)
+
+  Start downloading? (y/n, q to quit): y
+
+  Starting download...
+```
+
+</details>
 
 ### Extract-To-USB.ps1
 
@@ -86,7 +236,11 @@ cd C:\ALU-Scripts
 
 ### 3. Allow Scripts to Run (One-Time Setup)
 
-Windows blocks scripts by default for security. You need to allow them once. Copy and paste this into PowerShell and press **Enter**:
+Windows blocks downloaded scripts in two ways, and you need to handle **both**:
+
+**Step A -- Set the execution policy:**
+
+Copy and paste this into PowerShell and press **Enter**:
 
 ```powershell
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
@@ -94,7 +248,15 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 Type **Y** and press **Enter** when it asks to confirm. You only need to do this once.
 
-> **Alternative:** Right-click each `.ps1` script file, select **Properties**, and check **Unblock** at the bottom.
+**Step B -- Unblock the downloaded files:**
+
+Since these scripts were downloaded from the internet, Windows marks them as blocked. Run this in the same PowerShell window:
+
+```powershell
+Get-ChildItem -Path . -Filter *.ps1 | Unblock-File
+```
+
+Or you can do it manually: right-click each `.ps1` file, select **Properties**, check **Unblock** at the bottom, and click **OK**.
 
 ### 4. Run the Scripts
 
