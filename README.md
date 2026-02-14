@@ -172,19 +172,171 @@ Downloads build files from Google Drive. Handles everything automatically:
 
 ### Extract-To-USB.ps1
 
-Extracts downloaded zip files into a build folder ready to copy to USB. Features:
+Extracts downloaded zip files to a USB drive (or any destination). Features:
 
+- Remembers your last download location (from the download script)
 - Guided drive/folder selection with free space info
-- Optional content prompts (BitLCD Marquees, screensaver, themes)
-- **Daphne laserdisc game selection** -- choose all games, popular titles only, Dragon's Lair + Space Ace only, or hand-pick individual games
+- **Requires NTFS** -- non-NTFS drives are shown but blocked with reformat instructions
+- **Extract everything or customize:**
+  - BitLCD Marquees, Optional Themes, Screensaver (with sizes shown)
+  - System Packs -- extract all 76 systems, or pick specific ones (sizes shown for each)
+  - **Daphne laserdisc game selection** -- all games, popular titles, Dragon's Lair + Space Ace only, or hand-pick individual games
 - Smart space checking with trim-to-fit (exclude large system packs if short on space)
-- Accurate extracted sizes from zip headers (no guessing)
+- Accurate extracted sizes read from zip headers (no guessing)
 - **Resumable** -- tracks progress so interrupted extractions can continue
+
+> **Important:** The destination drive must be formatted as **NTFS**. FAT32 and exFAT
+> will not work because the build contains files larger than 4 GB and requires NTFS
+> features like long file paths. The script will warn you if you select a non-NTFS drive.
 
 ```powershell
 .\Extract-To-USB.ps1
 .\Extract-To-USB.ps1 -Path "D:\AS2"
 ```
+
+<details>
+<summary>Example output (click to expand)</summary>
+
+```
+.\Extract-To-USB.ps1
+
+================================================================================
+  STEP 1: WHERE ARE THE DOWNLOADED FILES?
+================================================================================
+
+  Last download location: D:\AS2
+
+  Use this folder? (y/n, q to quit): y
+  [OK] Source folder: D:\AS2
+    Found 6 folder(s) with 247 zip file(s)
+
+================================================================================
+  STEP 2: WHERE DO YOU WANT TO EXTRACT TO?
+================================================================================
+
+    [1]  C:\ drive  [NVMe - Windows]  (NTFS)  (500.00 GB free of 1.86 TB)
+    [2]  D:\ drive  [USB - External Drive]  (NTFS)  (5.08 TB free of 9.10 TB)
+    [3]  E:\ drive  [USB - My USB Drive]  (NTFS)  (931.38 GB free of 931.51 GB)
+    [4]  F:\ drive  [USB - Another Drive]  (exFAT)  (1.82 TB free of 1.82 TB)  ** Not NTFS **
+    [5]  Enter a custom path
+
+  NOTE: The destination drive must be formatted as NTFS.
+        Drives marked ** Not NTFS ** will need to be reformatted before use.
+
+  Pick a destination (enter number, q to quit): 3
+
+  Enter a folder name, or press Enter to extract directly to the drive root.
+
+  IMPORTANT: If you are extracting to an external USB drive, just press Enter.
+             Do NOT enter a folder name -- files need to go to the root of the drive.
+
+  Folder name (optional):
+
+  Destination: E:\
+
+================================================================================
+  STEP 3: CONTENT SELECTION
+================================================================================
+
+    [A]  Extract EVERYTHING (default)
+    [C]  Customize what to extract
+
+  Choice (A/C, q to quit): C
+
+  For each optional item below, choose whether to include it.
+  Required folders will be included automatically.
+
+  Include __BitLCD Marquees?
+    120 zips, ~66.82 GB compressed, ~68.42 GB extracted
+    Selecting N saves ~68.42 GB of space
+  (y/n): n
+    - Skipped
+
+  Include ha8800_screensaver v2.0b5?
+    9 zips, ~247.51 GB compressed, ~248.51 GB extracted
+    Selecting N saves ~248.51 GB of space
+  (y/n): n
+    - Skipped
+
+  Include ___Optional Themes?
+    1 zips, ~13.84 GB compressed, ~14.20 GB extracted
+    Selecting N saves ~14.20 GB of space
+  (y/n): n
+    - Skipped
+
+  Which System Packs do you want to extract?
+
+    [A]  Extract ALL systems (default)
+    [S]  Let me pick which systems I want
+
+  Choice (A/S): S
+
+  76 system packs available:
+
+    [ 1] AmstradCPC v2.0b2                3.82 GB  [39] NintendoFamicon v2.0b2          1.46 GB
+    [ 2] AmstradGX4000 v2.0b2            95.42 MB  [40] NintendoFamiconDiskSystem ...  872.55 MB
+    [ 3] Arcade v2.0b3                   15.40 GB  [41] NintendoGame&Watch v2.0b2      191.49 MB
+    ...
+
+  HOW TO SELECT:
+    all             Extract everything (default)
+    1,3,5           Pick specific systems
+    1-20            Pick a range
+    all,!5,!12      Extract all EXCEPT #5 and #12
+
+  Selection (Enter for all): 3,19
+
+  Including 2 system(s) (~103.99 GB)
+  Skipping 74 system(s) -- saving ~869.12 GB
+
+  Scanning Daphne Laserdisc Games zip...
+
+  Daphne Laserdisc Games
+    76 games, ~85.23 GB compressed, ~88.60 GB extracted
+
+    How would you like to handle it?
+
+    [1]  Include ALL 76 games           (~88.60 GB)
+    [2]  Dragon's Lair + Space Ace only  (~7.14 GB) -- saves ~81.46 GB
+    [3]  Popular games (19 games)       (~20.73 GB) -- saves ~67.86 GB
+    [4]  Let me pick which games to include
+    [N]  Skip Daphne entirely            -- saves ~88.60 GB
+
+  Choice: 2
+    + Including: Dragon's Lair, Dragon's Lair II, Space Ace ...
+    + Saving ~81.46 GB
+
+  Folders to extract:
+    + ___Key Folders / Base Build  (6 zips, ~5.09 GB)
+    + ___System Packs  (1 zips, ~15.09 GB)
+    + ___System Packs  (1 zips, ~85.23 GB) [6 games selected]
+
+  Skipped content: ~1.17 TB saved
+
+================================================================================
+  STEP 4: REVIEW AND SPACE CHECK
+================================================================================
+
+  Reading actual extracted sizes from zip headers...
+
+  Zip files:       8 files
+  Compressed size: ~105.41 GB
+  Extracted size:  ~27.88 GB  (actual from zip headers)
+
+  Destination:     E:\
+  Free space:      931.38 GB
+  Headroom:        ~903.50 GB to spare
+
+  Ready to extract? (y/n): y
+
+================================================================================
+  STEP 5: EXTRACTING
+================================================================================
+
+  Extracting...
+```
+
+</details>
 
 ### Analyze-Duplicates.ps1
 

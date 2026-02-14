@@ -4,15 +4,16 @@
 
 .DESCRIPTION
     Walks you through:
-      1. Where to extract to (pick a drive or use a folder here)
-      2. Which source folders to include (with optional content like BitLCD, screensaver, themes)
-      3. Daphne laserdisc game selection (all, popular, Dragon's Lair + Space Ace, or custom)
+      1. Where are the downloaded files (pick a drive and folder)
+      2. Where to extract to (pick a drive or use a folder here)
+      3. Extract everything or customize (system packs, themes, marquees, screensaver, Daphne games)
       4. Reviews everything and checks free space before starting
       5. Extracts all zips, preserving internal folder structure
       6. Supports resume if interrupted -- just run again
 
 .PARAMETER Path
-    The root directory containing the source folders. Defaults to the script's directory.
+    The root directory containing the downloaded files. If not provided, the script
+    will guide you through selecting the drive and folder interactively.
 
 .EXAMPLE
     .\Extract-To-USB.ps1
@@ -28,11 +29,6 @@ param(
     [Parameter(Position = 0)]
     [string]$Path
 )
-
-if (-not $Path) {
-    $Path = Split-Path -Parent $MyInvocation.MyCommand.Definition
-}
-$Path = (Resolve-Path $Path).Path
 
 # Load zip support for reading real uncompressed sizes from headers
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -57,16 +53,205 @@ function Write-Header {
     Write-Host $line -ForegroundColor Cyan
 }
 
+function Write-OK {
+    param([string]$Text)
+    Write-Host "  [OK] $Text" -ForegroundColor Green
+}
+
+function Write-Fail {
+    param([string]$Text)
+    Write-Host "  [!!] $Text" -ForegroundColor Red
+}
+
+function Write-Info {
+    param([string]$Text)
+    Write-Host "  $Text" -ForegroundColor Gray
+}
+
+function Test-Quit {
+    param([string]$Response)
+    if ($Response -and ($Response.Trim().ToLower() -eq 'q' -or $Response.Trim().ToLower() -eq 'quit')) {
+        Write-Host ""
+        Write-Host "  Exiting. Run this script again whenever you're ready!" -ForegroundColor Yellow
+        Write-Host ""
+        exit 0
+    }
+}
+
 # =================================================================================
-#  STEP 1: WHERE TO EXTRACT
+#  STEP 1: WHERE ARE THE DOWNLOADED FILES?
 # =================================================================================
 
-Write-Header "STEP 1: WHERE DO YOU WANT TO EXTRACT TO?"
-Write-Host ""
-Write-Host "  Source folder: $Path" -ForegroundColor Gray
+Write-Header "STEP 1: WHERE ARE THE DOWNLOADED FILES?"
+
+if ($Path) {
+    # User passed -Path on the command line -- use it directly
+    if (-not (Test-Path $Path)) {
+        Write-Fail "Path not found: $Path"
+        exit 1
+    }
+    $Path = (Resolve-Path $Path).Path
+}
+else {
+    # Check if the download script saved a path from a previous run
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+    $savedPathFile = Join-Path $scriptDir '.last-download-path'
+    $savedPath = $null
+
+    if (Test-Path $savedPathFile) {
+        $savedPath = (Get-Content $savedPathFile -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+        if ($savedPath -and (Test-Path $savedPath)) {
+            Write-Host ""
+            Write-Host "  Last download location: " -NoNewline -ForegroundColor White
+            Write-Host "$savedPath" -ForegroundColor Green
+            Write-Host ""
+            $useSaved = Read-Host "  Use this folder? (y/n, q to quit)"
+            Test-Quit $useSaved
+            if ($useSaved.ToLower() -ne 'n') {
+                $Path = $savedPath
+            }
+        }
+    }
+
+    if (-not $Path) {
+    Write-Host ""
+    Write-Host "  Where did you download the files to?" -ForegroundColor White
+    Write-Host "  (This is the folder you chose in the download script)" -ForegroundColor Gray
+    Write-Host ""
+
+    # Build disk info lookup for drive display
+    $diskInfoByLetter = @{}
+    try {
+        $partitions = Get-Partition -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter }
+        $disks = Get-Disk -ErrorAction SilentlyContinue
+        $diskLookup = @{}
+        foreach ($d in $disks) { $diskLookup[$d.Number] = $d }
+        foreach ($p in $partitions) {
+            $dl = [string]$p.DriveLetter
+            $dk = $diskLookup[$p.DiskNumber]
+            if ($dk) {
+                $diskInfoByLetter[$dl] = [PSCustomObject]@{
+                    BusType = $dk.BusType
+                    Model   = $dk.FriendlyName
+                }
+            }
+        }
+    } catch {}
+
+    # Show available drives
+    $drives = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
+              Where-Object { $_.Free -gt 0 -and $_.Root } |
+              Sort-Object Name
+
+    $driveList = @()
+    $idx = 0
+
+    foreach ($drv in $drives) {
+        $idx++
+        $freeSpace = Format-FileSize $drv.Free
+        $totalSpace = Format-FileSize ($drv.Used + $drv.Free)
+
+        $drvLabel = ""
+        try {
+            $vol = Get-Volume -DriveLetter $drv.Name -ErrorAction SilentlyContinue
+            if ($vol -and $vol.FileSystemLabel) { $drvLabel = $vol.FileSystemLabel }
+        } catch {}
+
+        $busTag = ""
+        $modelTag = ""
+        $di = $diskInfoByLetter[[string]$drv.Name]
+        if ($di) {
+            switch ($di.BusType) {
+                'USB'   { $busTag = "USB" }
+                'NVMe'  { $busTag = "NVMe" }
+                'SATA'  { $busTag = "SATA" }
+                'SAS'   { $busTag = "SAS" }
+                default { if ($di.BusType) { $busTag = "$($di.BusType)" } }
+            }
+            if ($di.Model) { $modelTag = $di.Model }
+        }
+
+        $label = "$($drv.Name):\ drive"
+        $details = @()
+        if ($busTag)   { $details += $busTag }
+        if ($drvLabel) { $details += $drvLabel }
+        if ($modelTag) { $details += $modelTag }
+        $detailStr = ""
+        if ($details.Count -gt 0) { $detailStr = "  [$($details -join ' - ')]" }
+
+        $driveList += [PSCustomObject]@{
+            Index  = $idx
+            Letter = $drv.Name
+            Root   = $drv.Root
+        }
+
+        Write-Host "    [$idx]  $label$detailStr  ($freeSpace free of $totalSpace)" -ForegroundColor White
+    }
+
+    Write-Host ""
+    $srcDriveChoice = Read-Host "  Pick the drive where you downloaded to (enter number, q to quit)"
+    Test-Quit $srcDriveChoice
+
+    $srcRoot = $null
+    if ($srcDriveChoice -match '^\d+$') {
+        $chosen = $driveList | Where-Object { $_.Index -eq [int]$srcDriveChoice }
+        if ($chosen) { $srcRoot = $chosen.Root }
+    }
+
+    if (-not $srcRoot) {
+        Write-Fail "Invalid selection. Exiting."
+        exit 1
+    }
+
+    # Ask for the folder name
+    Write-Host ""
+    Write-Host "  What was the folder name you used? (e.g. AS2, AwesomeSauce2)" -ForegroundColor White
+    Write-Host ""
+    $srcFolder = Read-Host "  Folder name (q to quit)"
+    Test-Quit $srcFolder
+
+    if (-not $srcFolder -or $srcFolder.Trim() -eq '') {
+        Write-Fail "No folder name entered. Exiting."
+        exit 1
+    }
+
+    $Path = Join-Path $srcRoot $srcFolder.Trim()
+
+    if (-not (Test-Path $Path)) {
+        Write-Fail "Folder not found: $Path"
+        Write-Host ""
+        Write-Host "  Make sure you've run the download script first and the folder exists." -ForegroundColor Yellow
+        exit 1
+    }
+    } # end of manual path selection
+}
+
+# Verify the folder has expected content (subfolders with zips)
+$subDirCheck = Get-ChildItem -Path $Path -Directory -ErrorAction SilentlyContinue
+$zipCheck = Get-ChildItem -Path $Path -Filter '*.zip' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+
+if (-not $subDirCheck -or -not $zipCheck) {
+    Write-Fail "No build files found in: $Path"
+    Write-Host ""
+    Write-Host "  This folder should contain subfolders with .zip files from the download." -ForegroundColor Yellow
+    Write-Host "  Make sure you selected the right folder." -ForegroundColor Yellow
+    exit 1
+}
+
+Write-OK "Source folder: $Path"
+
+$subCount = ($subDirCheck | Measure-Object).Count
+$zipCount = (Get-ChildItem -Path $Path -Filter '*.zip' -Recurse -ErrorAction SilentlyContinue | Measure-Object).Count
+Write-Info "  Found $subCount folder(s) with $zipCount zip file(s)"
+
+# =================================================================================
+#  STEP 2: WHERE TO EXTRACT
+# =================================================================================
+
+Write-Header "STEP 2: WHERE DO YOU WANT TO EXTRACT TO?"
 Write-Host ""
 
-# Build a lookup of disk info (bus type, model) keyed by drive letter
+# Build a lookup of disk info (bus type, model, filesystem) keyed by drive letter
 $diskInfoByLetter = @{}
 try {
     $partitions = Get-Partition -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter }
@@ -76,10 +261,17 @@ try {
     foreach ($p in $partitions) {
         $dl = [string]$p.DriveLetter
         $dk = $diskLookup[$p.DiskNumber]
+        # Get the filesystem type from the volume
+        $fsType = ""
+        try {
+            $vol = Get-Volume -DriveLetter $dl -ErrorAction SilentlyContinue
+            if ($vol -and $vol.FileSystemType) { $fsType = $vol.FileSystemType }
+        } catch {}
         if ($dk) {
             $diskInfoByLetter[$dl] = [PSCustomObject]@{
-                BusType  = $dk.BusType
-                Model    = $dk.FriendlyName
+                BusType    = $dk.BusType
+                Model      = $dk.FriendlyName
+                FileSystem = $fsType
             }
         }
     }
@@ -121,7 +313,11 @@ foreach ($drv in $drives) {
         if ($di.Model) { $modelTag = $di.Model }
     }
 
-    # Build the display line:  [1]  H:\ drive  USB - Realtek RTL9210B-CG  (925 GB free of 925 GB)
+    # Get filesystem type
+    $fsType = ""
+    if ($di -and $di.FileSystem) { $fsType = $di.FileSystem }
+
+    # Build the display line:  [1]  H:\ drive  [NTFS]  USB - Realtek RTL9210B-CG  (925 GB free of 925 GB)
     $label = "$($drv.Name):\ drive"
     $details = @()
     if ($busTag)   { $details += $busTag }
@@ -130,15 +326,26 @@ foreach ($drv in $drives) {
     $detailStr = ""
     if ($details.Count -gt 0) { $detailStr = "  [$($details -join ' - ')]" }
 
+    $fsTag = ""
+    $isNTFS = ($fsType -eq 'NTFS')
+    if ($fsType) { $fsTag = "  ($fsType)" }
+
     $driveList += [PSCustomObject]@{
-        Index    = $idx
-        Letter   = $drv.Name
-        Root     = $drv.Root
-        Free     = $drv.Free
-        FreeText = $freeSpace
+        Index      = $idx
+        Letter     = $drv.Name
+        Root       = $drv.Root
+        Free       = $drv.Free
+        FreeText   = $freeSpace
+        FileSystem = $fsType
     }
 
-    Write-Host "    [$idx]  $label$detailStr  ($freeSpace free of $totalSpace)" -ForegroundColor White
+    if ($isNTFS) {
+        Write-Host "    [$idx]  $label$detailStr$fsTag  ($freeSpace free of $totalSpace)" -ForegroundColor White
+    }
+    else {
+        Write-Host "    [$idx]  $label$detailStr$fsTag  ($freeSpace free of $totalSpace)" -ForegroundColor DarkGray -NoNewline
+        Write-Host "  ** Not NTFS **" -ForegroundColor Red
+    }
 }
 
 $idx++
@@ -152,54 +359,106 @@ $driveList += [PSCustomObject]@{
 Write-Host "    [$idx]  Enter a custom path" -ForegroundColor White
 
 Write-Host ""
-$driveChoice = Read-Host "  Pick a destination (enter number)"
+Write-Host "  NOTE: " -ForegroundColor Yellow -NoNewline
+Write-Host "The destination drive must be formatted as NTFS." -ForegroundColor White
+Write-Host "        Drives marked " -ForegroundColor Gray -NoNewline
+Write-Host "** Not NTFS **" -ForegroundColor Red -NoNewline
+Write-Host " will need to be reformatted before use." -ForegroundColor Gray
+Write-Host ""
 
 $destDrive = $null
-if ($driveChoice -match '^\d+$') {
-    $chosen = $driveList | Where-Object { $_.Index -eq [int]$driveChoice }
-    if ($chosen -and $chosen.Root) {
-        $destDrive = $chosen
-    }
-    elseif ($chosen -and -not $chosen.Root) {
-        # Custom path
-        Write-Host ""
-        $customPath = Read-Host "  Enter the full path (e.g. D:\MyFolder, \\server\share)"
-        if (-not $customPath -or $customPath.Trim() -eq '') {
-            Write-Host "  No path entered. Exiting." -ForegroundColor Yellow
-            exit 0
-        }
-        $customPath = $customPath.Trim()
-        if (-not (Test-Path $customPath)) {
-            Write-Host "  Path does not exist. Create it? (y/n)" -ForegroundColor Yellow
-            $mk = Read-Host "  "
-            if ($mk.ToLower() -eq 'y') {
-                New-Item -Path $customPath -ItemType Directory -Force | Out-Null
+while (-not $destDrive) {
+    $driveChoice = Read-Host "  Pick a destination (enter number, q to quit)"
+    Test-Quit $driveChoice
+
+    if ($driveChoice -match '^\d+$') {
+        $chosen = $driveList | Where-Object { $_.Index -eq [int]$driveChoice }
+        if ($chosen -and $chosen.Root) {
+            # Check NTFS requirement
+            if ($chosen.FileSystem -and $chosen.FileSystem -ne 'NTFS') {
+                Write-Host ""
+                Write-Host "  *** $($chosen.Letter):\ is formatted as $($chosen.FileSystem) -- this will NOT work ***" -ForegroundColor Red
+                Write-Host ""
+                Write-Host "  The ALU build requires NTFS because it uses files larger than 4 GB" -ForegroundColor Yellow
+                Write-Host "  and relies on NTFS features like long file paths." -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "  To use this drive, you'll need to reformat it as NTFS:" -ForegroundColor White
+                Write-Host "    1. Open File Explorer, right-click on $($chosen.Letter):\, select 'Format...'" -ForegroundColor Gray
+                Write-Host "    2. Change 'File system' to NTFS" -ForegroundColor Gray
+                Write-Host "    3. Click Start (this will erase everything on the drive)" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "  Please pick a different drive or reformat first." -ForegroundColor Yellow
+                Write-Host ""
+                continue
             }
-            else {
-                Write-Host "  Exiting." -ForegroundColor Yellow
+            $destDrive = $chosen
+        }
+        elseif ($chosen -and -not $chosen.Root) {
+            # Custom path -- check NTFS on the underlying drive
+            Write-Host ""
+            $customPath = Read-Host "  Enter the full path (e.g. D:\MyFolder, \\server\share)"
+            if (-not $customPath -or $customPath.Trim() -eq '') {
+                Write-Host "  No path entered. Exiting." -ForegroundColor Yellow
                 exit 0
             }
+            $customPath = $customPath.Trim()
+
+            # Check NTFS on the custom path's drive
+            $customQualifier = Split-Path -Qualifier $customPath -ErrorAction SilentlyContinue
+            if ($customQualifier) {
+                $customDL = $customQualifier.TrimEnd(':')
+                $customFS = ""
+                try {
+                    $customVol = Get-Volume -DriveLetter $customDL -ErrorAction SilentlyContinue
+                    if ($customVol -and $customVol.FileSystemType) { $customFS = $customVol.FileSystemType }
+                } catch {}
+                if ($customFS -and $customFS -ne 'NTFS') {
+                    Write-Host ""
+                    Write-Host "  *** $customQualifier\ is formatted as $customFS -- this will NOT work ***" -ForegroundColor Red
+                    Write-Host ""
+                    Write-Host "  The ALU build requires NTFS because it uses files larger than 4 GB" -ForegroundColor Yellow
+                    Write-Host "  and relies on NTFS features like long file paths." -ForegroundColor Yellow
+                    Write-Host ""
+                    Write-Host "  Please pick a different drive or reformat first." -ForegroundColor Yellow
+                    Write-Host ""
+                    continue
+                }
+            }
+
+            if (-not (Test-Path $customPath)) {
+                Write-Host "  Path does not exist. Create it? (y/n)" -ForegroundColor Yellow
+                $mk = Read-Host "  "
+                if ($mk.ToLower() -eq 'y') {
+                    New-Item -Path $customPath -ItemType Directory -Force | Out-Null
+                }
+                else {
+                    Write-Host "  Exiting." -ForegroundColor Yellow
+                    exit 0
+                }
+            }
+            $driveLetter = $customQualifier
+            $freeBytes = 0
+            if ($driveLetter) {
+                $dl = $driveLetter.TrimEnd(':')
+                $psd = Get-PSDrive -Name $dl -ErrorAction SilentlyContinue
+                if ($psd) { $freeBytes = $psd.Free }
+            }
+            $destDrive = [PSCustomObject]@{
+                Index      = 0
+                Letter     = $null
+                Root       = $customPath
+                Free       = $freeBytes
+                FreeText   = Format-FileSize $freeBytes
+                FileSystem = $customFS
+            }
         }
-        $driveLetter = (Split-Path -Qualifier $customPath -ErrorAction SilentlyContinue)
-        $freeBytes = 0
-        if ($driveLetter) {
-            $dl = $driveLetter.TrimEnd(':')
-            $psd = Get-PSDrive -Name $dl -ErrorAction SilentlyContinue
-            if ($psd) { $freeBytes = $psd.Free }
-        }
-        $destDrive = [PSCustomObject]@{
-            Index    = 0
-            Letter   = $null
-            Root     = $customPath
-            Free     = $freeBytes
-            FreeText = Format-FileSize $freeBytes
+        else {
+            Write-Host "  Invalid selection. Try again." -ForegroundColor Yellow
         }
     }
-}
-
-if (-not $destDrive) {
-    Write-Host "  Invalid selection. Exiting." -ForegroundColor Yellow
-    exit 0
+    else {
+        Write-Host "  Invalid selection. Try again." -ForegroundColor Yellow
+    }
 }
 
 # Ask for optional folder name
@@ -250,13 +509,10 @@ Write-Host ""
 Write-Host "  Destination: $outputPath" -ForegroundColor Green
 
 # =================================================================================
-#  STEP 2: OPTIONAL CONTENT
+#  STEP 3: CONTENT SELECTION
 # =================================================================================
 
-Write-Header "STEP 2: OPTIONAL CONTENT"
-Write-Host ""
-Write-Host "  Some content is optional. For each one below, choose whether to include it." -ForegroundColor Gray
-Write-Host "  Required folders will be included automatically." -ForegroundColor Gray
+Write-Header "STEP 3: CONTENT SELECTION"
 
 # Gather all subfolders
 $subDirs = Get-ChildItem -Path $Path -Directory -ErrorAction SilentlyContinue |
@@ -265,6 +521,25 @@ $subDirs = Get-ChildItem -Path $Path -Directory -ErrorAction SilentlyContinue |
 if ($subDirs.Count -eq 0) {
     Write-Host "  No source folders found in $Path" -ForegroundColor Red
     exit 1
+}
+
+Write-Host ""
+Write-Host "    [A]  Extract EVERYTHING (default)" -ForegroundColor Green
+Write-Host "    [C]  Customize what to extract" -ForegroundColor Yellow
+Write-Host ""
+
+$extractChoice = Read-Host "  Choice (A/C, q to quit)"
+Test-Quit $extractChoice
+
+$customizeExtraction = ($extractChoice.ToUpper() -eq 'C')
+
+if ($customizeExtraction) {
+    Write-Host ""
+    Write-Host "  For each optional item below, choose whether to include it." -ForegroundColor Gray
+    Write-Host "  Required folders will be included automatically." -ForegroundColor Gray
+}
+else {
+    Write-OK "Extracting everything"
 }
 
 # Helper: get actual uncompressed size of a single zip from its headers
@@ -432,11 +707,14 @@ function Get-DaphneGameMap {
     }
 }
 
-# Top-level folder keywords that are optional
+# Top-level folder keywords that are optional (only prompted when customizing)
 $optionalFolderKeywords = @('Optional', 'BitLCD', 'Marquee')
 
 # Subfolder keywords that are optional (like screensavers inside Key Folders)
 $optionalSubfolderKeywords = @('screensaver')
+
+# System Packs folder keyword -- gets special handling with per-system selection
+$systemPacksKeyword = 'System Packs'
 
 # Collect what to extract: list of PSCustomObjects with Name, FullPath, Zips
 $selectedSources = @()
@@ -463,13 +741,333 @@ foreach ($dir in $subDirs) {
     $info = Get-ZipInfo -FolderPath $dir.FullName
     if ($info.Count -eq 0) { continue }
 
+    # Check if this is the System Packs folder
+    $isSystemPacks = ($dir.Name -match $systemPacksKeyword)
+
     # Check if this top-level folder is optional
     $isOptional = $false
-    foreach ($kw in $optionalFolderKeywords) {
-        if ($dir.Name -match $kw) { $isOptional = $true; break }
+    if (-not $isSystemPacks) {
+        foreach ($kw in $optionalFolderKeywords) {
+            if ($dir.Name -match $kw) { $isOptional = $true; break }
+        }
     }
 
-    if ($isOptional) {
+    if ($isSystemPacks -and $customizeExtraction) {
+        # System Packs: let user pick which systems to extract
+        $spZips = @(Get-ChildItem -Path $dir.FullName -Filter '*.zip' -File -ErrorAction SilentlyContinue |
+                    Sort-Object Name)
+
+        # The final list of system pack zips to include (built by selection below)
+        $finalSpZips = @()
+
+        if ($spZips.Count -gt 0) {
+            Write-Host ""
+            Write-Host "  Which " -NoNewline
+            Write-Host "System Packs" -ForegroundColor Yellow -NoNewline
+            Write-Host " do you want to extract?" -ForegroundColor White
+            Write-Host ""
+            Write-Host "    [A]  Extract ALL systems (default)" -ForegroundColor Green
+            Write-Host "    [S]  Let me pick which systems I want" -ForegroundColor Yellow
+            Write-Host ""
+
+            $spChoice = Read-Host "  Choice (A/S)"
+
+            if ($spChoice.ToUpper() -eq 'S') {
+                # Show system list with sizes
+                Write-Host ""
+                $spList = @()
+                $spIdx = 0
+                foreach ($spz in $spZips) {
+                    $spIdx++
+                    $extractedSz = Get-ZipExtractedSize -ZipPath $spz.FullName
+                    $displayName = [System.IO.Path]::GetFileNameWithoutExtension($spz.Name)
+                    $spList += [PSCustomObject]@{
+                        Index         = $spIdx
+                        FileName      = $spz.Name
+                        DisplayName   = $displayName
+                        File          = $spz
+                        ExtractedSize = $extractedSz
+                    }
+                }
+
+                # Display in two columns
+                $nameWidth = 40
+                $colCount = 2
+                $rows = [math]::Ceiling($spList.Count / $colCount)
+
+                Write-Host "  $($spList.Count) system packs available:" -ForegroundColor White
+                Write-Host ""
+
+                for ($row = 0; $row -lt $rows; $row++) {
+                    $line = ""
+                    for ($col = 0; $col -lt $colCount; $col++) {
+                        $i = $col * $rows + $row
+                        if ($i -lt $spList.Count) {
+                            $sp = $spList[$i]
+                            $num = ($sp.Index).ToString().PadLeft(2)
+                            $name = $sp.DisplayName
+                            if ($name.Length -gt $nameWidth) { $name = $name.Substring(0, $nameWidth - 3) + "..." }
+                            $szText = Format-FileSize $sp.ExtractedSize
+                            $entry = "  [$num] $($name.PadRight($nameWidth)) $($szText.PadLeft(9))"
+                            $line += $entry
+                        }
+                    }
+                    Write-Host "  $line" -ForegroundColor White
+                }
+
+                Write-Host ""
+                Write-Host "  HOW TO SELECT:" -ForegroundColor Yellow
+                Write-Host "    all             Extract everything (default)" -ForegroundColor Gray
+                Write-Host "    1,3,5           Pick specific systems" -ForegroundColor Gray
+                Write-Host "    1-20            Pick a range" -ForegroundColor Gray
+                Write-Host "    all,!5,!12      Extract all EXCEPT #5 and #12" -ForegroundColor Gray
+                Write-Host ""
+
+                $spResponse = Read-Host "  Selection (Enter for all)"
+
+                if (-not $spResponse -or $spResponse.Trim() -eq '' -or $spResponse.Trim().ToLower() -eq 'all') {
+                    if (-not ($spResponse -and $spResponse -match '!')) {
+                        # All systems
+                        $finalSpZips = $spZips
+                        Write-OK "Extracting ALL system packs"
+                        $spResponse = $null
+                    }
+                }
+
+                if ($spResponse) {
+                    # Parse selection with support for ranges and exclusions
+                    $selectedNums = [System.Collections.Generic.HashSet[int]]::new()
+                    $excludedNums = [System.Collections.Generic.HashSet[int]]::new()
+                    $tokens = $spResponse -split ',' | ForEach-Object { $_.Trim() }
+
+                    foreach ($token in $tokens) {
+                        if ($token.ToLower() -eq 'all') {
+                            for ($n = 1; $n -le $spList.Count; $n++) { [void]$selectedNums.Add($n) }
+                        }
+                        elseif ($token -match '^!(\d+)-(\d+)$') {
+                            $s = [int]$Matches[1]; $e = [int]$Matches[2]
+                            for ($n = $s; $n -le $e; $n++) { [void]$excludedNums.Add($n) }
+                        }
+                        elseif ($token -match '^!(\d+)$') {
+                            [void]$excludedNums.Add([int]$Matches[1])
+                        }
+                        elseif ($token -match '^(\d+)-(\d+)$') {
+                            $s = [int]$Matches[1]; $e = [int]$Matches[2]
+                            for ($n = $s; $n -le $e; $n++) { [void]$selectedNums.Add($n) }
+                        }
+                        elseif ($token -match '^\d+$') {
+                            [void]$selectedNums.Add([int]$token)
+                        }
+                    }
+
+                    foreach ($ex in $excludedNums) { [void]$selectedNums.Remove($ex) }
+
+                    $includedZips = @()
+                    $includedSize = [long]0
+                    $excludedSize = [long]0
+
+                    foreach ($sp in $spList) {
+                        if ($selectedNums.Contains($sp.Index)) {
+                            $includedZips += $sp.File
+                            $includedSize += $sp.ExtractedSize
+                        }
+                        else {
+                            $excludedSize += $sp.ExtractedSize
+                            $skippedExtracted += $sp.ExtractedSize
+                        }
+                    }
+
+                    $finalSpZips = $includedZips
+
+                    Write-Host ""
+                    Write-Host "  Including $($includedZips.Count) system(s) (~$(Format-FileSize $includedSize))" -ForegroundColor Green
+                    if ($excludedSize -gt 0) {
+                        Write-Host "  Skipping $($spList.Count - $includedZips.Count) system(s) -- saving ~$(Format-FileSize $excludedSize)" -ForegroundColor DarkGray
+                    }
+                }
+            }
+            else {
+                # All systems
+                $finalSpZips = $spZips
+                Write-OK "Extracting ALL system packs"
+            }
+
+            # Now separate Daphne from the rest and handle it with game selection
+            $daphneSpZips  = @($finalSpZips | Where-Object { $_.Name -match '^Daphne\b' })
+            $regularSpZips = @($finalSpZips | Where-Object { $_.Name -notmatch '^Daphne\b' })
+
+            # Add the regular (non-Daphne) system packs
+            if ($regularSpZips.Count -gt 0) {
+                $selectedSources += [PSCustomObject]@{
+                    Name = $dir.Name
+                    Zips = $regularSpZips
+                }
+            }
+
+            # Handle Daphne with game selection
+            foreach ($dz in $daphneSpZips) {
+                Write-Host ""
+                Write-Host "  Scanning " -NoNewline
+                Write-Host "Daphne Laserdisc Games" -ForegroundColor Yellow -NoNewline
+                Write-Host " zip..." -ForegroundColor Gray
+
+                $gameMap = Get-DaphneGameMap -ZipPath $dz.FullName
+                $allGameNames = @($gameMap.Games.Keys | Sort-Object)
+                $totalGameSize = [long]0
+                foreach ($gn in $allGameNames) { $totalGameSize += $gameMap.Games[$gn] }
+                $totalWithShared = $totalGameSize + $gameMap.SharedSize
+
+                # Calculate DL + Space Ace size
+                $dlsaSize = [long]0
+                $dlsaCount = 0
+                foreach ($dg in $script:DaphneDLSpaceAce) {
+                    if ($gameMap.Games.ContainsKey($dg)) {
+                        $dlsaSize += $gameMap.Games[$dg]
+                        $dlsaCount++
+                    }
+                }
+                $dlsaWithShared = $dlsaSize + $gameMap.SharedSize
+
+                # Calculate popular size
+                $popularSize = [long]0
+                $popularCount = 0
+                foreach ($pg in $script:DaphnePopularGames) {
+                    if ($gameMap.Games.ContainsKey($pg)) {
+                        $popularSize += $gameMap.Games[$pg]
+                        $popularCount++
+                    }
+                }
+                $popularWithShared = $popularSize + $gameMap.SharedSize
+
+                Write-Host ""
+                Write-Host "  Daphne Laserdisc Games" -ForegroundColor Yellow
+                Write-Host "    $($allGameNames.Count) games, ~$(Format-FileSize $dz.Length) compressed, ~$(Format-FileSize $totalWithShared) extracted" -ForegroundColor Gray
+                Write-Host ""
+                Write-Host "    How would you like to handle it?" -ForegroundColor White
+                Write-Host ""
+                Write-Host "    [1]  Include ALL $($allGameNames.Count) games           (~$(Format-FileSize $totalWithShared))" -ForegroundColor White
+                Write-Host "    [2]  Dragon's Lair + Space Ace only  (~$(Format-FileSize $dlsaWithShared)) -- saves ~$(Format-FileSize ($totalWithShared - $dlsaWithShared))" -ForegroundColor White
+                Write-Host "    [3]  Popular games ($popularCount games)       (~$(Format-FileSize $popularWithShared)) -- saves ~$(Format-FileSize ($totalWithShared - $popularWithShared))" -ForegroundColor White
+                Write-Host "    [4]  Let me pick which games to include" -ForegroundColor White
+                Write-Host "    [N]  Skip Daphne entirely            -- saves ~$(Format-FileSize $totalWithShared)" -ForegroundColor White
+                Write-Host ""
+                $daphneChoice = Read-Host "  Choice"
+
+                $selectedGames = $null  # null = all games (no filter)
+                $daphneExtracted = $totalWithShared
+
+                switch ($daphneChoice.ToLower()) {
+                    '1' {
+                        $selectedGames = $null
+                        $daphneExtracted = $totalWithShared
+                        Write-Host "    + Including ALL Daphne games" -ForegroundColor Green
+                    }
+                    '2' {
+                        $selectedGames = @($script:DaphneDLSpaceAce | Where-Object { $gameMap.Games.ContainsKey($_) })
+                        $daphneExtracted = $dlsaWithShared
+                        $saved = $totalWithShared - $dlsaWithShared
+                        $gameNames = ($selectedGames | ForEach-Object {
+                            if ($script:DaphneGameNames.ContainsKey($_)) { $script:DaphneGameNames[$_] } else { $_ }
+                        }) -join ', '
+                        Write-Host "    + Including: $gameNames" -ForegroundColor Green
+                        Write-Host "    + Saving ~$(Format-FileSize $saved)" -ForegroundColor Green
+                    }
+                    '3' {
+                        $selectedGames = @($script:DaphnePopularGames | Where-Object { $gameMap.Games.ContainsKey($_) })
+                        $daphneExtracted = $popularWithShared
+                        $saved = $totalWithShared - $popularWithShared
+                        Write-Host "    + Including $($selectedGames.Count) popular games (~$(Format-FileSize $daphneExtracted)), saving ~$(Format-FileSize $saved)" -ForegroundColor Green
+                    }
+                    '4' {
+                        Write-Host ""
+                        Write-Host "    Games list (popular titles marked with *):" -ForegroundColor Gray
+                        Write-Host ""
+
+                        $gameList = @()
+                        $gi = 0
+                        foreach ($gn in $allGameNames) {
+                            if ($gameMap.Games[$gn] -lt 1MB) { continue }
+                            $gi++
+                            $isPop = $script:DaphnePopularGames -contains $gn
+                            $marker = if ($isPop) { "*" } else { " " }
+                            $sz = Format-FileSize $gameMap.Games[$gn]
+                            $displayName = if ($script:DaphneGameNames.ContainsKey($gn)) { $script:DaphneGameNames[$gn] } else { $gn }
+                            $gameList += [PSCustomObject]@{ Index = $gi; Name = $gn; DisplayName = $displayName; Size = $gameMap.Games[$gn]; Popular = $isPop }
+                            Write-Host ("    [{0,2}]{1} {2,-30} ~{3}" -f $gi, $marker, $displayName, $sz) -ForegroundColor White
+                        }
+
+                        Write-Host ""
+                        Write-Host "    Enter game numbers to INCLUDE (e.g. 1,2,3 or 1-5 or 'popular')" -ForegroundColor Yellow
+                        Write-Host "    Type 'all' for everything, 'popular' for the starred ones" -ForegroundColor Gray
+                        Write-Host ""
+                        $gameResponse = Read-Host "  Include"
+
+                        if ($gameResponse.ToLower() -eq 'all') {
+                            $selectedGames = $null
+                            $daphneExtracted = $totalWithShared
+                            Write-Host "    + Including ALL games" -ForegroundColor Green
+                        }
+                        elseif ($gameResponse.ToLower() -eq 'popular') {
+                            $selectedGames = @($script:DaphnePopularGames | Where-Object { $gameMap.Games.ContainsKey($_) })
+                            $daphneExtracted = $popularWithShared
+                            Write-Host "    + Including $($selectedGames.Count) popular games" -ForegroundColor Green
+                        }
+                        else {
+                            $toInclude = [System.Collections.Generic.HashSet[int]]::new()
+                            $tokens = $gameResponse -split ',' | ForEach-Object { $_.Trim() }
+                            foreach ($token in $tokens) {
+                                if ($token -match '^(\d+)-(\d+)$') {
+                                    $s = [int]$Matches[1]; $e = [int]$Matches[2]
+                                    for ($n = $s; $n -le $e; $n++) { [void]$toInclude.Add($n) }
+                                }
+                                elseif ($token -match '^\d+$') {
+                                    [void]$toInclude.Add([int]$token)
+                                }
+                            }
+
+                            $selectedGames = @()
+                            $customSize = [long]0
+                            foreach ($gl in $gameList) {
+                                if ($toInclude.Contains($gl.Index)) {
+                                    $selectedGames += $gl.Name
+                                    $customSize += $gl.Size
+                                }
+                            }
+                            $daphneExtracted = $customSize + $gameMap.SharedSize
+                            Write-Host "    + Including $($selectedGames.Count) games (~$(Format-FileSize $daphneExtracted))" -ForegroundColor Green
+                        }
+                    }
+                    'n' {
+                        $skippedExtracted += $totalWithShared
+                        Write-Host "    - Skipped Daphne entirely" -ForegroundColor DarkGray
+                        continue
+                    }
+                    default {
+                        $selectedGames = $null
+                        $daphneExtracted = $totalWithShared
+                        Write-Host "    + Including ALL Daphne games (default)" -ForegroundColor Green
+                    }
+                }
+
+                # Add to selected sources with Daphne metadata
+                $selectedSources += [PSCustomObject]@{
+                    Name            = $dir.Name
+                    Zips            = @($dz)
+                    DaphneFilter    = $selectedGames
+                    DaphneGameMap   = $gameMap
+                    DaphneExtracted = $daphneExtracted
+                }
+            }
+        }
+    }
+    elseif ($isSystemPacks) {
+        # Not customizing -- include all system packs
+        $selectedSources += [PSCustomObject]@{
+            Name = $dir.Name
+            Zips = $info.Zips
+        }
+    }
+    elseif ($isOptional -and $customizeExtraction) {
         $include = Ask-Optional -Label $dir.Name -ZipCount $info.Count -Size $info.Size -ExtractedSize $info.ExtractedSize
         if ($include) {
             $selectedSources += [PSCustomObject]@{
@@ -481,6 +1079,13 @@ foreach ($dir in $subDirs) {
         else {
             $skippedExtracted += $info.ExtractedSize
             Write-Host "    - Skipped" -ForegroundColor DarkGray
+        }
+    }
+    elseif ($isOptional) {
+        # Not customizing -- include all optional content
+        $selectedSources += [PSCustomObject]@{
+            Name = $dir.Name
+            Zips = $info.Zips
         }
     }
     else {
@@ -498,6 +1103,31 @@ foreach ($dir in $subDirs) {
                 Zips = $regularZips
             }
         }
+
+        if (-not $customizeExtraction) {
+            # Not customizing -- include ALL Daphne zips and ALL subfolders
+            if ($daphneZips.Count -gt 0) {
+                foreach ($dz in $daphneZips) {
+                    $selectedSources += [PSCustomObject]@{
+                        Name  = $dir.Name
+                        Zips  = @($dz)
+                    }
+                }
+            }
+
+            $subFolders = Get-ChildItem -Path $dir.FullName -Directory -ErrorAction SilentlyContinue
+            foreach ($sf in $subFolders) {
+                $sfZips = @(Get-ChildItem -Path $sf.FullName -Filter '*.zip' -File -ErrorAction SilentlyContinue)
+                if ($sfZips.Count -gt 0) {
+                    $selectedSources += [PSCustomObject]@{
+                        Name = "$($dir.Name)\$($sf.Name)"
+                        Zips = $sfZips
+                    }
+                }
+            }
+        }
+        else {
+        # Customizing -- prompt for Daphne and optional subfolders
 
         # Handle Daphne zip(s) with game selection
         foreach ($dz in $daphneZips) {
@@ -700,6 +1330,7 @@ foreach ($dir in $subDirs) {
                 }
             }
         }
+        } # end customizeExtraction else block for required folders
     }
 }
 
@@ -729,10 +1360,10 @@ if ($skippedExtracted -gt 0) {
 }
 
 # =================================================================================
-#  STEP 3: GATHER ZIPS AND CHECK SPACE
+#  STEP 4: GATHER ZIPS AND CHECK SPACE
 # =================================================================================
 
-Write-Header "STEP 3: REVIEW AND SPACE CHECK"
+Write-Header "STEP 4: REVIEW AND SPACE CHECK"
 
 Write-Host ""
 Write-Host "  Reading actual extracted sizes from zip headers..." -ForegroundColor Gray
@@ -932,10 +1563,10 @@ if ($confirm.ToLower() -ne 'y') {
 }
 
 # =================================================================================
-#  STEP 4: EXTRACT
+#  STEP 5: EXTRACT
 # =================================================================================
 
-Write-Header "STEP 4: EXTRACTING"
+Write-Header "STEP 5: EXTRACTING"
 
 # -- Resume support ---------------------------------------------------------------
 $progressFile = Join-Path $outputPath '.extraction-progress'

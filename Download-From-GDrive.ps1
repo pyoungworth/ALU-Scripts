@@ -1062,6 +1062,10 @@ Write-Host ""
 Write-Host "  Starting download..." -ForegroundColor Green
 Write-Host ""
 
+# Save the download path so the extract script can find it later
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$downloadPath | Out-File -FilePath (Join-Path $scriptDir '.last-download-path') -Encoding utf8 -Force
+
 # Build the rclone command arguments
 $rcloneArgs = @(
     'copy',
