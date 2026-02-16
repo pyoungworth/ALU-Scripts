@@ -176,7 +176,6 @@ Extracts downloaded zip files to a USB drive (or any destination). Features:
 
 - Remembers your last download location (from the download script)
 - Guided drive/folder selection with free space info
-- **Requires NTFS** -- non-NTFS drives are shown but blocked with reformat instructions
 - **Extract everything or customize:**
   - BitLCD Marquees, Optional Themes, Screensaver (with sizes shown)
   - System Packs -- extract all 76 systems, or pick specific ones (sizes shown for each)
@@ -184,10 +183,6 @@ Extracts downloaded zip files to a USB drive (or any destination). Features:
 - Smart space checking with trim-to-fit (exclude large system packs if short on space)
 - Accurate extracted sizes read from zip headers (no guessing)
 - **Resumable** -- tracks progress so interrupted extractions can continue
-
-> **Important:** The destination drive must be formatted as **NTFS**. FAT32 and exFAT
-> will not work because the build contains files larger than 4 GB and requires NTFS
-> features like long file paths. The script will warn you if you select a non-NTFS drive.
 
 ```powershell
 .\Extract-To-USB.ps1
@@ -214,14 +209,11 @@ Extracts downloaded zip files to a USB drive (or any destination). Features:
   STEP 2: WHERE DO YOU WANT TO EXTRACT TO?
 ================================================================================
 
-    [1]  C:\ drive  [NVMe - Windows]  (NTFS)  (500.00 GB free of 1.86 TB)
-    [2]  D:\ drive  [USB - External Drive]  (NTFS)  (5.08 TB free of 9.10 TB)
-    [3]  E:\ drive  [USB - My USB Drive]  (NTFS)  (931.38 GB free of 931.51 GB)
-    [4]  F:\ drive  [USB - Another Drive]  (exFAT)  (1.82 TB free of 1.82 TB)  ** Not NTFS **
+    [1]  C:\ drive  [NVMe - Windows]  (500.00 GB free of 1.86 TB)
+    [2]  D:\ drive  [USB - External Drive]  (5.08 TB free of 9.10 TB)
+    [3]  E:\ drive  [USB - My USB Drive]  (931.38 GB free of 931.51 GB)
+    [4]  F:\ drive  [USB - Another Drive]  (1.82 TB free of 1.82 TB)
     [5]  Enter a custom path
-
-  NOTE: The destination drive must be formatted as NTFS.
-        Drives marked ** Not NTFS ** will need to be reformatted before use.
 
   Pick a destination (enter number, q to quit): 3
 
@@ -338,6 +330,26 @@ Extracts downloaded zip files to a USB drive (or any destination). Features:
 
 </details>
 
+### Install-AutoBoot.ps1
+
+Sets up auto-boot so your ALU automatically launches Awesome Sauce v2 when powered on. Can be run standalone or is offered automatically at the end of `Extract-To-USB.ps1`.
+
+- If called from the extraction script, the USB path is passed automatically
+- If run standalone, presents a drive picker (flags drives that already have OneSauce extracted)
+- Validates that Awesome Sauce v2 has been extracted to the selected drive
+- Installs three components:
+  1. `00_install_autostart.sh` into `OneSauce\scripter\`
+  2. Extracts `autostart.zip` to the USB root
+  3. `00_init_menu.sh` into the `autostart\` folder
+
+```powershell
+.\Install-AutoBoot.ps1
+.\Install-AutoBoot.ps1 -UsbPath "E:\"
+```
+
+> **Note:** You may need to start OneSauce manually the first time. After that, the ALU
+> will automatically boot into Awesome Sauce v2 whenever the USB drive is inserted.
+
 ### Analyze-Duplicates.ps1
 
 Scans directories for duplicate/versioned files (e.g., `App v2.0b2.zip` and `App v2.0b3.zip`). Identifies old versions and offers interactive cleanup.
@@ -426,11 +438,22 @@ Once the download finishes, extract to USB:
 .\Extract-To-USB.ps1
 ```
 
+At the end of extraction, you'll be asked if you want to set up auto-boot. You can also run it separately:
+
+```powershell
+.\Install-AutoBoot.ps1
+```
+
 ### 5. Plug the USB into your Legends Ultimate and enjoy!
 
 ## Community
 
 Join the [AwesomeSauce Facebook group](https://www.facebook.com/groups/2118196125010827) for discussion, help, and updates related to the AS2 RetroFE build and ALU modding.
+
+## Acknowledgments
+
+- **Seun Alexander** -- for helping diagnose and fix the autostart lockup issue
+- **[TacticalDingus](https://www.youtube.com/@TacticalDingus)** -- for the auto-boot feature for Awesome Sauce 2.0
 
 ## Author
 

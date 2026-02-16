@@ -84,6 +84,8 @@ function Test-Quit {
 
 Write-Header "STEP 1: WHERE ARE THE DOWNLOADED FILES?"
 
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+
 if ($Path) {
     # User passed -Path on the command line -- use it directly
     if (-not (Test-Path $Path)) {
@@ -94,7 +96,6 @@ if ($Path) {
 }
 else {
     # Check if the download script saved a path from a previous run
-    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
     $savedPathFile = Join-Path $scriptDir '.last-download-path'
     $savedPath = $null
 
@@ -251,7 +252,7 @@ Write-Info "  Found $subCount folder(s) with $zipCount zip file(s)"
 Write-Header "STEP 2: WHERE DO YOU WANT TO EXTRACT TO?"
 Write-Host ""
 
-# Build a lookup of disk info (bus type, model, filesystem) keyed by drive letter
+# Build a lookup of disk info (bus type, model) keyed by drive letter
 $diskInfoByLetter = @{}
 try {
     $partitions = Get-Partition -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter }
@@ -261,17 +262,10 @@ try {
     foreach ($p in $partitions) {
         $dl = [string]$p.DriveLetter
         $dk = $diskLookup[$p.DiskNumber]
-        # Get the filesystem type from the volume
-        $fsType = ""
-        try {
-            $vol = Get-Volume -DriveLetter $dl -ErrorAction SilentlyContinue
-            if ($vol -and $vol.FileSystemType) { $fsType = $vol.FileSystemType }
-        } catch {}
         if ($dk) {
             $diskInfoByLetter[$dl] = [PSCustomObject]@{
-                BusType    = $dk.BusType
-                Model      = $dk.FriendlyName
-                FileSystem = $fsType
+                BusType = $dk.BusType
+                Model   = $dk.FriendlyName
             }
         }
     }
@@ -313,11 +307,7 @@ foreach ($drv in $drives) {
         if ($di.Model) { $modelTag = $di.Model }
     }
 
-    # Get filesystem type
-    $fsType = ""
-    if ($di -and $di.FileSystem) { $fsType = $di.FileSystem }
-
-    # Build the display line:  [1]  H:\ drive  [NTFS]  USB - Realtek RTL9210B-CG  (925 GB free of 925 GB)
+    # Build the display line:  [1]  H:\ drive  [USB - Realtek RTL9210B-CG]  (925 GB free of 925 GB)
     $label = "$($drv.Name):\ drive"
     $details = @()
     if ($busTag)   { $details += $busTag }
@@ -326,26 +316,15 @@ foreach ($drv in $drives) {
     $detailStr = ""
     if ($details.Count -gt 0) { $detailStr = "  [$($details -join ' - ')]" }
 
-    $fsTag = ""
-    $isNTFS = ($fsType -eq 'NTFS')
-    if ($fsType) { $fsTag = "  ($fsType)" }
-
     $driveList += [PSCustomObject]@{
         Index      = $idx
         Letter     = $drv.Name
         Root       = $drv.Root
         Free       = $drv.Free
         FreeText   = $freeSpace
-        FileSystem = $fsType
     }
 
-    if ($isNTFS) {
-        Write-Host "    [$idx]  $label$detailStr$fsTag  ($freeSpace free of $totalSpace)" -ForegroundColor White
-    }
-    else {
-        Write-Host "    [$idx]  $label$detailStr$fsTag  ($freeSpace free of $totalSpace)" -ForegroundColor DarkGray -NoNewline
-        Write-Host "  ** Not NTFS **" -ForegroundColor Red
-    }
+    Write-Host "    [$idx]  $label$detailStr  ($freeSpace free of $totalSpace)" -ForegroundColor White
 }
 
 $idx++
@@ -357,13 +336,6 @@ $driveList += [PSCustomObject]@{
     FreeText = ""
 }
 Write-Host "    [$idx]  Enter a custom path" -ForegroundColor White
-
-Write-Host ""
-Write-Host "  NOTE: " -ForegroundColor Yellow -NoNewline
-Write-Host "The destination drive must be formatted as NTFS." -ForegroundColor White
-Write-Host "        Drives marked " -ForegroundColor Gray -NoNewline
-Write-Host "** Not NTFS **" -ForegroundColor Red -NoNewline
-Write-Host " will need to be reformatted before use." -ForegroundColor Gray
 Write-Host ""
 
 $destDrive = $null
@@ -374,27 +346,9 @@ while (-not $destDrive) {
     if ($driveChoice -match '^\d+$') {
         $chosen = $driveList | Where-Object { $_.Index -eq [int]$driveChoice }
         if ($chosen -and $chosen.Root) {
-            # Check NTFS requirement
-            if ($chosen.FileSystem -and $chosen.FileSystem -ne 'NTFS') {
-                Write-Host ""
-                Write-Host "  *** $($chosen.Letter):\ is formatted as $($chosen.FileSystem) -- this will NOT work ***" -ForegroundColor Red
-                Write-Host ""
-                Write-Host "  The ALU build requires NTFS because it uses files larger than 4 GB" -ForegroundColor Yellow
-                Write-Host "  and relies on NTFS features like long file paths." -ForegroundColor Yellow
-                Write-Host ""
-                Write-Host "  To use this drive, you'll need to reformat it as NTFS:" -ForegroundColor White
-                Write-Host "    1. Open File Explorer, right-click on $($chosen.Letter):\, select 'Format...'" -ForegroundColor Gray
-                Write-Host "    2. Change 'File system' to NTFS" -ForegroundColor Gray
-                Write-Host "    3. Click Start (this will erase everything on the drive)" -ForegroundColor Gray
-                Write-Host ""
-                Write-Host "  Please pick a different drive or reformat first." -ForegroundColor Yellow
-                Write-Host ""
-                continue
-            }
             $destDrive = $chosen
         }
         elseif ($chosen -and -not $chosen.Root) {
-            # Custom path -- check NTFS on the underlying drive
             Write-Host ""
             $customPath = Read-Host "  Enter the full path (e.g. D:\MyFolder, \\server\share)"
             if (-not $customPath -or $customPath.Trim() -eq '') {
@@ -403,27 +357,7 @@ while (-not $destDrive) {
             }
             $customPath = $customPath.Trim()
 
-            # Check NTFS on the custom path's drive
             $customQualifier = Split-Path -Qualifier $customPath -ErrorAction SilentlyContinue
-            if ($customQualifier) {
-                $customDL = $customQualifier.TrimEnd(':')
-                $customFS = ""
-                try {
-                    $customVol = Get-Volume -DriveLetter $customDL -ErrorAction SilentlyContinue
-                    if ($customVol -and $customVol.FileSystemType) { $customFS = $customVol.FileSystemType }
-                } catch {}
-                if ($customFS -and $customFS -ne 'NTFS') {
-                    Write-Host ""
-                    Write-Host "  *** $customQualifier\ is formatted as $customFS -- this will NOT work ***" -ForegroundColor Red
-                    Write-Host ""
-                    Write-Host "  The ALU build requires NTFS because it uses files larger than 4 GB" -ForegroundColor Yellow
-                    Write-Host "  and relies on NTFS features like long file paths." -ForegroundColor Yellow
-                    Write-Host ""
-                    Write-Host "  Please pick a different drive or reformat first." -ForegroundColor Yellow
-                    Write-Host ""
-                    continue
-                }
-            }
 
             if (-not (Test-Path $customPath)) {
                 Write-Host "  Path does not exist. Create it? (y/n)" -ForegroundColor Yellow
@@ -449,7 +383,6 @@ while (-not $destDrive) {
                 Root       = $customPath
                 Free       = $freeBytes
                 FreeText   = Format-FileSize $freeBytes
-                FileSystem = $customFS
             }
         }
         else {
@@ -1553,6 +1486,24 @@ foreach ($z in $allZips) {
     Write-Host "    $($z.Source)\$($z.Name)  ($(Format-FileSize $z.Size))$note" -ForegroundColor DarkGray
 }
 
+# Check if auto-boot setup is available -- ask now so the user doesn't have to wait
+$enableAutoBoot = $false
+$autoBootScript = Join-Path $scriptDir 'Install-AutoBoot.ps1'
+if (Test-Path $autoBootScript) {
+    Write-Host ""
+    Write-Host "  Would you like to set up auto-boot into Awesome Sauce v2?" -ForegroundColor White
+    Write-Host "  This configures the ALU to automatically launch AS2 when powered on." -ForegroundColor Gray
+    Write-Host ""
+    $autoBootChoice = Read-Host "  Enable auto-boot? (y/n)"
+    if ($autoBootChoice -and $autoBootChoice.Trim().ToLower() -eq 'y') {
+        $enableAutoBoot = $true
+        Write-Host "  Auto-boot will be set up after extraction." -ForegroundColor Green
+    }
+    else {
+        Write-Host "  Skipped. You can run .\Install-AutoBoot.ps1 later if you change your mind." -ForegroundColor Gray
+    }
+}
+
 Write-Host ""
 $confirm = Read-Host "  Ready to extract? (y/n)"
 
@@ -1756,3 +1707,16 @@ Write-Host "  Files:     $outputFileCount" -ForegroundColor White
 Write-Host ""
 Write-Host "  Ready to go!" -ForegroundColor Green
 Write-Host ""
+
+# =================================================================================
+#  OPTIONAL: AUTO-BOOT SETUP
+# =================================================================================
+
+if ($enableAutoBoot -and $failed -eq 0) {
+    & $autoBootScript -UsbPath $outputPath
+}
+elseif ($enableAutoBoot -and $failed -gt 0) {
+    Write-Host "  Skipping auto-boot setup due to extraction failures." -ForegroundColor Yellow
+    Write-Host "  You can run .\Install-AutoBoot.ps1 later after fixing the issues." -ForegroundColor Gray
+    Write-Host ""
+}
