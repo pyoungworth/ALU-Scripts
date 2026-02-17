@@ -6,7 +6,7 @@
     Walks you through:
       1. Where are the downloaded files (pick a drive and folder)
       2. Where to extract to (pick a drive or use a folder here)
-      3. Extract everything or customize (system packs, themes, marquees, screensaver, Daphne games)
+      3. Extract everything or customize (system packs, themes, screensaver, Daphne games)
       4. Reviews everything and checks free space before starting
       5. Extracts all zips, preserving internal folder structure
       6. Supports resume if interrupted -- just run again
@@ -252,7 +252,7 @@ Write-Info "  Found $subCount folder(s) with $zipCount zip file(s)"
 Write-Header "STEP 2: WHERE DO YOU WANT TO EXTRACT TO?"
 Write-Host ""
 
-# Build a lookup of disk info (bus type, model) keyed by drive letter
+# Build a lookup of disk info (bus type, model, filesystem) keyed by drive letter
 $diskInfoByLetter = @{}
 try {
     $partitions = Get-Partition -ErrorAction SilentlyContinue | Where-Object { $_.DriveLetter }
@@ -262,10 +262,16 @@ try {
     foreach ($p in $partitions) {
         $dl = [string]$p.DriveLetter
         $dk = $diskLookup[$p.DiskNumber]
+        $fsType = ""
+        try {
+            $vol = Get-Volume -DriveLetter $dl -ErrorAction SilentlyContinue
+            if ($vol -and $vol.FileSystemType) { $fsType = $vol.FileSystemType }
+        } catch {}
         if ($dk) {
             $diskInfoByLetter[$dl] = [PSCustomObject]@{
-                BusType = $dk.BusType
-                Model   = $dk.FriendlyName
+                BusType    = $dk.BusType
+                Model      = $dk.FriendlyName
+                FileSystem = $fsType
             }
         }
     }
@@ -307,7 +313,11 @@ foreach ($drv in $drives) {
         if ($di.Model) { $modelTag = $di.Model }
     }
 
-    # Build the display line:  [1]  H:\ drive  [USB - Realtek RTL9210B-CG]  (925 GB free of 925 GB)
+    # Get filesystem type
+    $fsType = ""
+    if ($di -and $di.FileSystem) { $fsType = $di.FileSystem }
+
+    # Build the display line:  [1]  H:\ drive  (NTFS)  [USB - Realtek RTL9210B-CG]  (925 GB free of 925 GB)
     $label = "$($drv.Name):\ drive"
     $details = @()
     if ($busTag)   { $details += $busTag }
@@ -316,15 +326,19 @@ foreach ($drv in $drives) {
     $detailStr = ""
     if ($details.Count -gt 0) { $detailStr = "  [$($details -join ' - ')]" }
 
+    $fsTag = ""
+    if ($fsType) { $fsTag = "  ($fsType)" }
+
     $driveList += [PSCustomObject]@{
         Index      = $idx
         Letter     = $drv.Name
         Root       = $drv.Root
         Free       = $drv.Free
         FreeText   = $freeSpace
+        FileSystem = $fsType
     }
 
-    Write-Host "    [$idx]  $label$detailStr  ($freeSpace free of $totalSpace)" -ForegroundColor White
+    Write-Host "    [$idx]  $label$detailStr$fsTag  ($freeSpace free of $totalSpace)" -ForegroundColor White
 }
 
 $idx++
@@ -346,7 +360,23 @@ while (-not $destDrive) {
     if ($driveChoice -match '^\d+$') {
         $chosen = $driveList | Where-Object { $_.Index -eq [int]$driveChoice }
         if ($chosen -and $chosen.Root) {
-            $destDrive = $chosen
+            if ($chosen.FileSystem -and $chosen.FileSystem -ne 'NTFS') {
+                Write-Host ""
+                Write-Host "  Warning: $($chosen.Letter):\ is formatted as $($chosen.FileSystem)." -ForegroundColor Yellow
+                Write-Host "  NTFS is recommended for best compatibility." -ForegroundColor Yellow
+                Write-Host ""
+                $ntfsConfirm = Read-Host "  Continue anyway? (y/n)"
+                if ($ntfsConfirm -and $ntfsConfirm.Trim().ToLower() -eq 'y') {
+                    $destDrive = $chosen
+                }
+                else {
+                    Write-Host ""
+                    continue
+                }
+            }
+            else {
+                $destDrive = $chosen
+            }
         }
         elseif ($chosen -and -not $chosen.Root) {
             Write-Host ""
@@ -358,6 +388,25 @@ while (-not $destDrive) {
             $customPath = $customPath.Trim()
 
             $customQualifier = Split-Path -Qualifier $customPath -ErrorAction SilentlyContinue
+            $customFS = ""
+            if ($customQualifier) {
+                $customDL = $customQualifier.TrimEnd(':')
+                try {
+                    $customVol = Get-Volume -DriveLetter $customDL -ErrorAction SilentlyContinue
+                    if ($customVol -and $customVol.FileSystemType) { $customFS = $customVol.FileSystemType }
+                } catch {}
+                if ($customFS -and $customFS -ne 'NTFS') {
+                    Write-Host ""
+                    Write-Host "  Warning: $customQualifier\ is formatted as $customFS." -ForegroundColor Yellow
+                    Write-Host "  NTFS is recommended for best compatibility." -ForegroundColor Yellow
+                    Write-Host ""
+                    $ntfsConfirm = Read-Host "  Continue anyway? (y/n)"
+                    if (-not $ntfsConfirm -or $ntfsConfirm.Trim().ToLower() -ne 'y') {
+                        Write-Host ""
+                        continue
+                    }
+                }
+            }
 
             if (-not (Test-Path $customPath)) {
                 Write-Host "  Path does not exist. Create it? (y/n)" -ForegroundColor Yellow
@@ -641,7 +690,10 @@ function Get-DaphneGameMap {
 }
 
 # Top-level folder keywords that are optional (only prompted when customizing)
-$optionalFolderKeywords = @('Optional', 'BitLCD', 'Marquee')
+$optionalFolderKeywords = @('Optional')
+
+# Top-level folder keywords that are always excluded from extraction
+$excludedFolderKeywords = @('BitLCD', 'Marquee')
 
 # Subfolder keywords that are optional (like screensavers inside Key Folders)
 $optionalSubfolderKeywords = @('screensaver')
@@ -671,6 +723,13 @@ function Ask-Optional {
 }
 
 foreach ($dir in $subDirs) {
+    # Skip folders that should never be extracted (e.g. BitLCD Marquees)
+    $isExcluded = $false
+    foreach ($kw in $excludedFolderKeywords) {
+        if ($dir.Name -match $kw) { $isExcluded = $true; break }
+    }
+    if ($isExcluded) { continue }
+
     $info = Get-ZipInfo -FolderPath $dir.FullName
     if ($info.Count -eq 0) { continue }
 

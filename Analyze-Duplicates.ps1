@@ -25,15 +25,61 @@ param(
     [string]$Path
 )
 
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+
 if (-not $Path) {
-    $Path = Split-Path -Parent $MyInvocation.MyCommand.Definition
+    # Check .last-download-path for a saved location
+    $savedPathFile = Join-Path $scriptDir '.last-download-path'
+
+    if (Test-Path $savedPathFile) {
+        $savedPath = (Get-Content $savedPathFile -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
+        if ($savedPath -and (Test-Path $savedPath)) {
+            Write-Host ""
+            Write-Host "  Last download location: " -NoNewline -ForegroundColor White
+            Write-Host "$savedPath" -ForegroundColor Green
+            Write-Host ""
+            $useSaved = Read-Host "  Scan this folder for duplicates? (y/n, q to quit)"
+            if ($useSaved -and ($useSaved.Trim().ToLower() -eq 'q' -or $useSaved.Trim().ToLower() -eq 'quit')) {
+                Write-Host ""
+                Write-Host "  Exiting. Run this script again whenever you're ready!" -ForegroundColor Yellow
+                Write-Host ""
+                exit 0
+            }
+            if ($useSaved.ToLower() -ne 'n') {
+                $Path = $savedPath
+            }
+        }
+    }
+
+    if (-not $Path) {
+        Write-Host ""
+        $manualPath = Read-Host "  Enter the path to scan (q to quit)"
+        if ($manualPath -and ($manualPath.Trim().ToLower() -eq 'q' -or $manualPath.Trim().ToLower() -eq 'quit')) {
+            Write-Host ""
+            Write-Host "  Exiting. Run this script again whenever you're ready!" -ForegroundColor Yellow
+            Write-Host ""
+            exit 0
+        }
+        if ($manualPath -and $manualPath.Trim() -ne '' -and (Test-Path $manualPath.Trim())) {
+            $Path = $manualPath.Trim()
+        }
+        else {
+            Write-Host "  Invalid path. Exiting." -ForegroundColor Yellow
+            exit 1
+        }
+    }
 }
+
 $Path = (Resolve-Path $Path).Path
 
 # -- Helpers ----------------------------------------------------------------------
 
 function Parse-VersionedName {
     param([string]$Name)
+
+    # Strip "Sys Spec" so "MAME Sys Specv2.0b2.zip" becomes "MAME v2.0b2.zip"
+    # This lets the version parser handle the BitLCD naming convention
+    $Name = $Name -replace '\s+Sys\s*Specv', ' v'
 
     if ($Name -match '^(.+?)\s+v(\d+)\.(\d+)b(\d+)(.*)$') {
         return [PSCustomObject]@{
@@ -151,19 +197,19 @@ foreach ($dirGroup in $groupedByDir) {
         }
     }
 
-    # Also create a key variant without extension so folders and zips group together
-    # e.g. "SNES v2.0b2" (folder) and "SNES v2.0b2.zip" share base "SNES"
+    # Group by base name + type (file vs folder) so only like items are compared
+    # A zip file and its extracted folder are NOT duplicates
     $parsedWithBaseKey = foreach ($p in $parsed) {
         $baseOnly = Normalize-BaseName $p.ParsedInfo.BaseName
+        $typeTag = if ($p.Item.IsDirectory) { "dir" } else { "file" }
         [PSCustomObject]@{
             Item          = $p.Item
             ParsedInfo    = $p.ParsedInfo
             NormalizedKey = $p.NormalizedKey
-            BaseKey       = $baseOnly
+            BaseKey       = "$baseOnly|$typeTag"
         }
     }
 
-    # Group by BaseKey to catch folders + zips of the same thing
     $baseGroups = $parsedWithBaseKey | Group-Object -Property BaseKey | Where-Object { $_.Count -gt 1 }
 
     foreach ($bg in $baseGroups) {
@@ -180,6 +226,16 @@ foreach ($dirGroup in $groupedByDir) {
         # Separate into: newest-version items vs older items
         $newestItems = @($members | Where-Object { $_.ParsedInfo.SortKey -eq $highestVersion })
         $olderItems  = @($members | Where-Object { $_.ParsedInfo.SortKey -ne $highestVersion })
+
+        # If multiple items share the newest version (same-version duplicates),
+        # keep the one with the newest file date and flag the rest as duplicates
+        if ($newestItems.Count -gt 1) {
+            $sorted = $newestItems | Sort-Object { $_.Item.LastModified } -Descending
+            $keepItem = $sorted | Select-Object -First 1
+            $dupeItems = @($sorted | Select-Object -Skip 1)
+            $newestItems = @($keepItem)
+            $olderItems = @($olderItems) + $dupeItems
+        }
 
         # Skip if nothing is older (no duplicates)
         if ($olderItems.Count -eq 0) { continue }
@@ -213,8 +269,10 @@ foreach ($dirGroup in $groupedByDir) {
             })
 
             $typeTag = if ($item.IsDirectory) { "folder" } else { "file" }
+            $isDupe = ($ver -eq $newestVer)
+            $label = if ($isDupe) { "DUPE" } else { "OLD " }
             Write-Host "    [#$($findingId.ToString().PadLeft(3))] " -ForegroundColor Red -NoNewline
-            Write-Host "OLD  " -ForegroundColor Red -NoNewline
+            Write-Host "$label " -ForegroundColor Red -NoNewline
             Write-Host "$($item.Name)  ($ver, $(Format-FileSize $size), $typeTag)" -ForegroundColor Gray
         }
 

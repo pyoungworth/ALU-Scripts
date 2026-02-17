@@ -15,7 +15,6 @@ Downloads build files from Google Drive. Handles everything automatically:
 - Auto-detects the RetroFE ALU shared drive and build folder
 - Lets you pick where to download and optionally limit bandwidth
 - **Choose what to download** -- download everything, or customize:
-  - BitLCD Marquees (with size shown)
   - Optional Themes (with size shown)
   - Screensaver (with size shown)
   - System Packs -- download all 76 systems, or pick specific ones (sizes shown for each)
@@ -41,7 +40,7 @@ Downloads build files from Google Drive. Handles everything automatically:
     2. Connect to Google Drive (you'll sign in via browser)
     3. Pick where to save the files
     4. Optionally limit download speed
-    5. Choose optional content (marquees, themes, system packs)
+    5. Choose optional content (themes, system packs)
     6. Download everything
 
   If the download gets interrupted, just run this script
@@ -104,12 +103,6 @@ Downloads build files from Google Drive. Handles everything automatically:
   Choice (A/C, q to quit): C
 
   Checking sizes of optional content...
-
-  Include BitLCD Marquees?  (~35.87 GB)
-  (LCD marquee images for supported games)
-
-  (y/n, default: y, q to quit): y
-    + Including BitLCD Marquees
 
   Include Optional Themes?  (~13.84 GB)
   (Additional visual themes for RetroFE)
@@ -175,11 +168,14 @@ Downloads build files from Google Drive. Handles everything automatically:
 Extracts downloaded zip files to a USB drive (or any destination). Features:
 
 - Remembers your last download location (from the download script)
-- Guided drive/folder selection with free space info
+- Guided drive/folder selection with free space and filesystem type info
+- Soft warning for non-NTFS drives (NTFS recommended, but not required)
 - **Extract everything or customize:**
-  - BitLCD Marquees, Optional Themes, Screensaver (with sizes shown)
+  - Optional Themes, Screensaver (with sizes shown)
   - System Packs -- extract all 76 systems, or pick specific ones (sizes shown for each)
   - **Daphne laserdisc game selection** -- all games, popular titles, Dragon's Lair + Space Ace only, or hand-pick individual games
+- BitLCD marquee packs are automatically excluded (use `Extract-BitLCD.ps1` for those)
+- **Auto-boot option** -- asked before extraction starts, runs automatically after completion
 - Smart space checking with trim-to-fit (exclude large system packs if short on space)
 - Accurate extracted sizes read from zip headers (no guessing)
 - **Resumable** -- tracks progress so interrupted extractions can continue
@@ -209,10 +205,10 @@ Extracts downloaded zip files to a USB drive (or any destination). Features:
   STEP 2: WHERE DO YOU WANT TO EXTRACT TO?
 ================================================================================
 
-    [1]  C:\ drive  [NVMe - Windows]  (500.00 GB free of 1.86 TB)
-    [2]  D:\ drive  [USB - External Drive]  (5.08 TB free of 9.10 TB)
-    [3]  E:\ drive  [USB - My USB Drive]  (931.38 GB free of 931.51 GB)
-    [4]  F:\ drive  [USB - Another Drive]  (1.82 TB free of 1.82 TB)
+    [1]  C:\ drive  [NVMe - Windows]  (NTFS)  (500.00 GB free of 1.86 TB)
+    [2]  D:\ drive  [USB - External Drive]  (NTFS)  (5.08 TB free of 9.10 TB)
+    [3]  E:\ drive  [USB - My USB Drive]  (NTFS)  (931.38 GB free of 931.51 GB)
+    [4]  F:\ drive  [USB - Another Drive]  (exFAT)  (1.82 TB free of 1.82 TB)
     [5]  Enter a custom path
 
   Pick a destination (enter number, q to quit): 3
@@ -237,12 +233,6 @@ Extracts downloaded zip files to a USB drive (or any destination). Features:
 
   For each optional item below, choose whether to include it.
   Required folders will be included automatically.
-
-  Include __BitLCD Marquees?
-    120 zips, ~66.82 GB compressed, ~68.42 GB extracted
-    Selecting N saves ~68.42 GB of space
-  (y/n): n
-    - Skipped
 
   Include ha8800_screensaver v2.0b5?
     9 zips, ~247.51 GB compressed, ~248.51 GB extracted
@@ -319,6 +309,12 @@ Extracts downloaded zip files to a USB drive (or any destination). Features:
   Free space:      931.38 GB
   Headroom:        ~903.50 GB to spare
 
+  Would you like to set up auto-boot into Awesome Sauce v2?
+  This configures the ALU to automatically launch AS2 when powered on.
+
+  Enable auto-boot? (y/n): y
+  Auto-boot will be set up after extraction.
+
   Ready to extract? (y/n): y
 
 ================================================================================
@@ -350,9 +346,32 @@ Sets up auto-boot so your ALU automatically launches Awesome Sauce v2 when power
 > **Note:** You may need to start OneSauce manually the first time. After that, the ALU
 > will automatically boot into Awesome Sauce v2 whenever the USB drive is inserted.
 
+### Extract-BitLCD.ps1
+
+Extracts BitLCD marquee packs to a **separate** USB drive for the ALU BitLCD display. This is NOT the same drive as OneSauce -- the BitLCD USB is its own dedicated drive.
+
+- Auto-detects the `__BitLCD Marquees` folder from your last download location
+- Guided drive selection with OneSauce drive detection (warns if you pick the wrong drive)
+- FAT32 or exFAT recommended for the BitLCD USB
+- **Deduplicates** Sys Spec / non-Sys-Spec copies automatically (saves time on large packs)
+- **Extract all or pick specific packs** with the same selection syntax as the other scripts
+- Extracts into `\bitlcd\thirdparty\OneSauce\` on the USB drive (folder name is customizable)
+- **Resumable** -- tracks progress so interrupted extractions can continue
+
+```powershell
+.\Extract-BitLCD.ps1
+.\Extract-BitLCD.ps1 -Path "F:\AS2\__BitLCD Marquees"
+```
+
 ### Analyze-Duplicates.ps1
 
-Scans directories for duplicate/versioned files (e.g., `App v2.0b2.zip` and `App v2.0b3.zip`). Identifies old versions and offers interactive cleanup.
+Scans directories for duplicate/versioned files and offers interactive cleanup. Catches:
+
+- **Old versions** -- e.g., `App v2.0b2.zip` alongside `App v2.0b3.zip`
+- **Same-version duplicates** -- e.g., `MAME Sys Specv2.0b2.zip` and `MAME v2.0b2.zip` (common in BitLCD marquee packs)
+- Keeps the newest file by date when versions match
+- Remembers your last download location (from the download script)
+- Interactive selection with the same `1,3,5` / `1-20` / `all,!5` syntax
 
 ```powershell
 .\Analyze-Duplicates.ps1
@@ -442,6 +461,18 @@ At the end of extraction, you'll be asked if you want to set up auto-boot. You c
 
 ```powershell
 .\Install-AutoBoot.ps1
+```
+
+If you have a BitLCD display, extract the marquee packs to a **separate** USB drive:
+
+```powershell
+.\Extract-BitLCD.ps1
+```
+
+You can also clean up duplicate files from your download folder (e.g., Sys Spec copies):
+
+```powershell
+.\Analyze-Duplicates.ps1
 ```
 
 ### 5. Plug the USB into your Legends Ultimate and enjoy!
